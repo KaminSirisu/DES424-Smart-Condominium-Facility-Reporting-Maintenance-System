@@ -1,0 +1,27 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+.next/
+coverage/
+*.tsbuildinfo
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+*.pem
+
+# AWS and infrastructure output
+.aws-sam/
+cdk.out/
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Test and editor output
+playwright-report/
+test-results/
+.DS_Store
+.idea/
+.vscode/
