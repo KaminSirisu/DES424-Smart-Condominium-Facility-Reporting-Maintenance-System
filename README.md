@@ -4,7 +4,41 @@ A DES424 project for reporting defects in shared condominium facilities through 
 
 ## Project status
 
-This repository currently contains the proposed structure and documentation only. No application, infrastructure, or CI/CD workflow has been implemented yet. The project brief is the source of requirements; directory names and deployment choices here are a starting plan.
+This repository has requirement-independent development shells for both frontends and the backend, plus local checks and CI. Business flows, AWS infrastructure, and deployment are not implemented. The project brief and later decisions under `docs/` govern requirements; directory names and deployment choices here remain a starting plan.
+
+## Local development
+
+Use Node.js 22.12 or newer and npm. Node 22 is recorded in `.nvmrc` and used by CI.
+
+```sh
+npm ci
+cp .env.example .env
+cp frontend/liff-app/.env.example frontend/liff-app/.env
+cp frontend/admin-dashboard/.env.example frontend/admin-dashboard/.env
+```
+
+Run each service in a separate terminal:
+
+```sh
+npm run dev:liff       # http://127.0.0.1:5173
+npm run dev:admin      # http://127.0.0.1:5174
+npm run dev:backend    # http://127.0.0.1:3000/health
+```
+
+The backend serves only `GET /health` locally. The Lambda handler for that route is in `backend/src/handlers/health.ts`. The frontend pages are placeholders and do not call an API or initialize LIFF.
+If a frontend port is already in use, Vite prints the alternate port it selected.
+
+Run all local checks before opening a pull request:
+
+```sh
+npm run typecheck
+npm run lint
+npm run format:check
+npm test
+npm run build
+```
+
+Use `npm run format` to apply formatting. The GitHub Actions workflow runs the same checks on pushes and pull requests. It does not deploy anything. Environment files other than examples are ignored by Git; `VITE_` values are public in browser bundles and must not contain secrets.
 
 ## Planned structure
 
@@ -50,7 +84,7 @@ The API design must also cover duplicate-ticket merging, supervisor escalations,
 - Staff portal: React-based frontend; Docker/ECS Fargate is a bonus deployment target, while deployment to AWS is required.
 - Staff identity: accounts and password hashes in DynamoDB; login issues signed, expiring JWTs. Staff roles are enforced by backend endpoints.
 
-React build tooling, package management, AWS infrastructure tooling, and the final deployment topology still need to be chosen. Do not add setup commands here until they work in a fresh checkout.
+The development baseline uses npm workspaces, Vite, TypeScript, ESLint, Prettier, and Vitest. AWS infrastructure tooling and the final deployment topology still need to be chosen.
 
 ## Team workflow
 

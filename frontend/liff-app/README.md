@@ -12,4 +12,6 @@ Planned folders:
 
 The backend must verify identity tokens received from LIFF. Do not trust a user ID supplied as an ordinary form field. LINE notification delivery depends on the Messaging API recipient rules, so the reporting flow should account for the Official Account relationship.
 
-Add installation, local-run, build, and LIFF configuration steps after the app is initialized.
+The current app is a plain React shell. It does not initialize LIFF or make API calls.
+
+From the repository root, run `npm ci` and then `npm run dev:liff`. The local page is at `http://127.0.0.1:5173`. Copy this folder's `.env.example` to `.env` to customize the public page title. Run `npm run build --workspace @scfrms/liff-app` to build it.

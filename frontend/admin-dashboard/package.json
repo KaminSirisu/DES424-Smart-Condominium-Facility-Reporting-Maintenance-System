@@ -1,0 +1,15 @@
+{
+  "name": "@scfrms/admin-dashboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5174",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  }
+}
