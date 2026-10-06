@@ -10,6 +10,10 @@ This repository has requirement-independent development shells for both frontend
 
 Use Node.js 22.12 or newer and npm. Node 22 is recorded in `.nvmrc` and used by CI.
 
+This repository is an npm workspace. Run every install from the repository root: `npm ci` installs the dependencies of all three apps into the single root `node_modules/`, and the apps resolve packages from there. Do not run `npm install` inside `frontend/*` or `backend/`; it can create a separate `node_modules/` or lockfile in that folder and break the shared install. If you get `Cannot find module` errors or `npx tsc` reports "This is not the tsc command you are looking for", the root install is incomplete; run `npm ci` from the root again.
+
+After cloning, run these commands from the repository root:
+
 ```sh
 npm ci
 cp .env.example .env
@@ -27,6 +31,17 @@ npm run dev:backend    # http://127.0.0.1:3000/health
 
 The backend serves only `GET /health` locally. The Lambda handler for that route is in `backend/src/handlers/health.ts`. The frontend pages are placeholders and do not call an API or initialize LIFF.
 If a frontend port is already in use, Vite prints the alternate port it selected.
+The dev servers listen on `127.0.0.1` rather than `localhost` so every machine uses the same IPv4 loopback address and the servers are not exposed to the local network. Opening `http://localhost:5173` in a browser also works.
+
+To add or remove a dependency, run npm from the root and name the workspace:
+
+```sh
+npm install <package> --workspace @scfrms/admin-dashboard
+npm install -D <package> --workspace @scfrms/liff-app
+npm uninstall <package> --workspace @scfrms/backend
+```
+
+Shared tooling (TypeScript, ESLint, Prettier, Vitest, type packages) is declared in the root `package.json`. Each frontend also declares `vite` and `@vitejs/plugin-react`, which its `vite.config.ts` imports. Keep a package's version range the same everywhere it is declared so npm installs one copy. Commit `package-lock.json` whenever dependencies change.
 
 Run all local checks before opening a pull request:
 
