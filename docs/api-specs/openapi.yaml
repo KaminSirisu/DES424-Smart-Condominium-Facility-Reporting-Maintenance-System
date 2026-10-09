@@ -1,0 +1,709 @@
+openapi: 3.1.0
+info:
+  title: Smart Condominium Facility Reporting API
+  version: 0.1.0-draft
+  description: >-
+    Proposed contract for SCFRMS-31. Paths and rules are subject to team review;
+    no endpoint in this file is implemented by this design task. Automated LINE
+    notifications are triggered by ticket events, so there is no public /messages path.
+servers:
+  - url: /v1
+tags:
+  - name: Tickets
+    description: Reporting, repair workflow, merge, reopen, and audit history.
+  - name: Uploads
+    description: Temporary direct-to-S3 image upload grants.
+  - name: Zones
+    description: Reportable facility locations.
+  - name: Dashboard
+    description: Manager counts and historical analysis.
+  - name: Staff auth
+    description: Proposed staff session contract pending security review.
+  - name: Internal
+    description: Trusted worker contract, never available to browsers.
+paths:
+  /health:
+    get:
+      summary: Check API health
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: Service is responding.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /zones:
+    get:
+      tags: [Zones]
+      summary: List reportable facility zones
+      operationId: listZones
+      security:
+        - lineToken: []
+        - staffToken: []
+      responses:
+        '200':
+          description: Current zone catalog.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Zone'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /uploads:
+    post:
+      tags: [Uploads]
+      summary: Request a short-lived image upload URL
+      description: >-
+        Reporters may request DEFECT uploads; authorized staff may request
+        REPAIR_PROOF uploads. A later ticket action verifies the uploaded object,
+        its purpose, and its owner before accepting the uploadId.
+      operationId: createUploadIntent
+      security:
+        - lineToken: []
+        - staffToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadIntent'
+      responses:
+        '201':
+          description: Temporary direct-to-S3 upload grant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadGrant'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /tickets:
+    get:
+      tags: [Tickets]
+      summary: List tickets visible to the caller
+      description: >-
+        Reporter results are restricted to that verified LINE identity, including
+        associations retained after a merge. Staff may use filters within their
+        authorized scope. A ticket ID or filter never bypasses authorization.
+      operationId: listTickets
+      security:
+        - lineToken: []
+        - staffToken: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - in: query
+          name: status
+          schema:
+            $ref: '#/components/schemas/TicketStatus'
+        - in: query
+          name: zoneId
+          schema: { type: string }
+        - in: query
+          name: teamId
+          description: Staff filter only.
+          schema: { type: string }
+        - in: query
+          name: completedFrom
+          description: Staff-only lower bound for completedAt, inclusive.
+          schema: { type: string, format: date }
+        - in: query
+          name: completedTo
+          description: Staff-only upper bound for completedAt, inclusive.
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: A page of visible tickets.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketPage'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Tickets]
+      summary: Submit a facility defect report
+      description: >-
+        The backend derives reporter identity from a verified LINE token. A 201
+        response means the report was stored and a receipt was queued; it does
+        not guarantee that LINE has delivered the receipt. RECEIVED is a draft
+        intake state pending the team's synchronous-vs-asynchronous triage decision.
+      operationId: createTicket
+      security:
+        - lineToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTicket'
+            example:
+              zoneId: LOBBY
+              description: Water is leaking beside the elevator.
+              defectPhotoUploadId: upl_123
+      responses:
+        '201':
+          description: Ticket stored; triage and notification may continue asynchronously.
+          headers:
+            Location:
+              schema: { type: string }
+              description: Relative URL of the new ticket.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /tickets/{ticketId}:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    get:
+      tags: [Tickets]
+      summary: Get a ticket visible to the caller
+      description: >-
+        A merged source remains discoverable by an associated reporter and
+        includes mergedIntoTicketId. Raw LINE IDs and S3 keys are never returned.
+      operationId: getTicket
+      security:
+        - lineToken: []
+        - staffToken: []
+      responses:
+        '200':
+          description: Current ticket view.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{ticketId}/events:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    get:
+      tags: [Tickets]
+      summary: Read ticket audit events
+      operationId: listTicketEvents
+      security:
+        - staffToken: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Audit events in time order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketEventPage'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{ticketId}/priority:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    patch:
+      tags: [Tickets]
+      summary: Accept or override the suggested priority
+      operationId: setTicketPriority
+      security:
+        - staffToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetPriority'
+      responses:
+        '200':
+          description: Priority updated and audited.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /tickets/{ticketId}/status:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    patch:
+      tags: [Tickets]
+      summary: Start or finish repair work
+      description: >-
+        ASSIGNED -> IN_PROGRESS -> DONE. DONE requires a verified REPAIR_PROOF
+        upload. Completion queues a reporter notification.
+      operationId: setTicketStatus
+      security:
+        - staffToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetStatus'
+      responses:
+        '200':
+          description: Status updated and audited.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /tickets/{ticketId}/reopen:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    post:
+      tags: [Tickets]
+      summary: Reopen an unresolved repair
+      description: >-
+        An associated reporter may reopen DONE -> ASSIGNED. A REOPENED audit
+        event is recorded. Deadline reset behavior is not approved yet.
+      operationId: reopenTicket
+      security:
+        - lineToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReopenTicket'
+      responses:
+        '200':
+          description: Ticket reopened.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /tickets/{ticketId}/merge:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    post:
+      tags: [Tickets]
+      summary: Merge same-zone duplicate tickets into this ticket
+      description: >-
+        Source tickets become MERGED and point to this canonical ticket. All
+        source reporter associations are retained on the canonical ticket.
+      operationId: mergeTickets
+      security:
+        - staffToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MergeTickets'
+      responses:
+        '200':
+          description: Canonical ticket after merge.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /dashboard/summary:
+    get:
+      tags: [Dashboard]
+      summary: Read current manager dashboard counts
+      operationId: getDashboardSummary
+      security:
+        - staffToken: []
+      responses:
+        '200':
+          description: Current counts, overdue work, and team workloads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardSummary'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /dashboard/history:
+    get:
+      tags: [Dashboard]
+      summary: Read historical repair data
+      operationId: getDashboardHistory
+      security:
+        - staffToken: []
+      parameters:
+        - in: query
+          name: from
+          required: true
+          schema: { type: string, format: date }
+        - in: query
+          name: to
+          required: true
+          schema: { type: string, format: date }
+        - in: query
+          name: zoneId
+          schema: { type: string }
+      responses:
+        '200':
+          description: Historical aggregates for the requested period.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardHistory'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/staff/login:
+    post:
+      tags: [Staff auth]
+      summary: Start a staff session (auth approach pending approval)
+      operationId: loginStaff
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Short-lived staff token; exact session model is open.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffSession'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/staff/me:
+    get:
+      tags: [Staff auth]
+      summary: Read the current staff identity and role
+      operationId: getCurrentStaff
+      security:
+        - staffToken: []
+      responses:
+        '200':
+          description: Safe staff profile without password hash.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffProfile'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /internal/tickets/{ticketId}/classification:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    post:
+      tags: [Internal]
+      summary: Record AI classification suggestions from a trusted worker
+      description: >-
+        Proposed internal-only callback to satisfy SCFRMS-31. An event or direct
+        Lambda invocation may replace HTTP. Never expose this route to clients.
+      operationId: applyClassification
+      x-internal: true
+      security:
+        - serviceIam: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassificationResult'
+      responses:
+        '204': { description: Suggestions recorded and routing initiated. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+components:
+  securitySchemes:
+    lineToken:
+      type: http
+      scheme: bearer
+      description: Verified LINE credential from LIFF; exact token type is pending review.
+    staffToken:
+      type: http
+      scheme: bearer
+      description: Staff credential with backend role checks; session design is pending review.
+    serviceIam:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: Internal AWS-signed authorization placeholder; never a client token.
+  parameters:
+    TicketId:
+      in: path
+      name: ticketId
+      required: true
+      schema: { type: string }
+    Cursor:
+      in: query
+      name: cursor
+      schema: { type: string }
+    Limit:
+      in: query
+      name: limit
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      description: Stable unique key for one intended action and its retries.
+      schema: { type: string, minLength: 8, maxLength: 128 }
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unauthorized:
+      description: Missing or invalid credential.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Forbidden:
+      description: Authenticated caller lacks permission.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: Resource not found or hidden from the caller.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Conflict:
+      description: Current ticket state or idempotency key conflicts with this action.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unprocessable:
+      description: Validation failed, such as an unverified upload or missing repair proof.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    TooManyRequests:
+      description: Caller exceeded a rate limit.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            requestId: { type: string }
+    Zone:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+    Priority:
+      type: string
+      enum: [CRITICAL, MEDIUM, LOW]
+    TicketStatus:
+      type: string
+      description: RECEIVED and MERGED are draft additions to the technician states in the PDF.
+      enum: [RECEIVED, ASSIGNED, IN_PROGRESS, DONE, MERGED]
+    Ticket:
+      type: object
+      description: Caller-safe ticket view. No LINE ID, raw S3 key, or password hash.
+      required: [id, zoneId, description, status, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        zoneId: { type: string }
+        description: { type: string }
+        status: { $ref: '#/components/schemas/TicketStatus' }
+        category: { type: string, description: Maintenance domain after triage. }
+        suggestedPriority: { $ref: '#/components/schemas/Priority' }
+        priority: { $ref: '#/components/schemas/Priority' }
+        teamId: { type: string }
+        deadlineAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        mergedIntoTicketId: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    TicketPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Ticket' }
+        nextCursor: { type: string }
+    CreateTicket:
+      type: object
+      additionalProperties: false
+      required: [zoneId, description, defectPhotoUploadId]
+      properties:
+        zoneId: { type: string }
+        description: { type: string, minLength: 1, maxLength: 2000 }
+        defectPhotoUploadId: { type: string }
+    UploadIntent:
+      type: object
+      additionalProperties: false
+      required: [purpose, contentType, sizeBytes]
+      properties:
+        purpose:
+          type: string
+          enum: [DEFECT, REPAIR_PROOF]
+        contentType: { type: string, description: Allowed image MIME type; exact list is open. }
+        sizeBytes: { type: integer, minimum: 1 }
+    UploadGrant:
+      type: object
+      required: [uploadId, uploadUrl, method, headers, expiresAt]
+      properties:
+        uploadId: { type: string }
+        uploadUrl: { type: string, format: uri }
+        method: { type: string, const: PUT }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+        expiresAt: { type: string, format: date-time }
+    SetPriority:
+      type: object
+      additionalProperties: false
+      required: [priority]
+      properties:
+        priority: { $ref: '#/components/schemas/Priority' }
+        reason: { type: string, maxLength: 1000 }
+    SetStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [IN_PROGRESS, DONE]
+        proofPhotoUploadId:
+          type: string
+          description: Required when status is DONE; verified as REPAIR_PROOF.
+    ReopenTicket:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: string, maxLength: 1000 }
+    MergeTickets:
+      type: object
+      additionalProperties: false
+      required: [sourceTicketIds]
+      properties:
+        sourceTicketIds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string }
+    TicketEvent:
+      type: object
+      required: [id, ticketId, kind, occurredAt]
+      properties:
+        id: { type: string }
+        ticketId: { type: string }
+        kind: { type: string }
+        occurredAt: { type: string, format: date-time }
+        actorType: { type: string, enum: [REPORTER, STAFF, SYSTEM] }
+        note: { type: string }
+    TicketEventPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TicketEvent' }
+        nextCursor: { type: string }
+    DashboardSummary:
+      type: object
+      required: [openCount, overdueCount, countsByStatus, teamWorkloads, generatedAt]
+      properties:
+        openCount: { type: integer, minimum: 0 }
+        overdueCount: { type: integer, minimum: 0 }
+        countsByStatus:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        teamWorkloads:
+          type: array
+          items:
+            type: object
+            required: [teamId, openCount]
+            properties:
+              teamId: { type: string }
+              openCount: { type: integer, minimum: 0 }
+        generatedAt: { type: string, format: date-time }
+    DashboardHistory:
+      type: object
+      required: [from, to, zoneBreakdown]
+      properties:
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        zoneBreakdown:
+          type: array
+          items:
+            type: object
+            required: [zoneId, reportedCount, completedCount]
+            properties:
+              zoneId: { type: string }
+              reportedCount: { type: integer, minimum: 0 }
+              completedCount: { type: integer, minimum: 0 }
+    StaffSession:
+      type: object
+      required: [accessToken, expiresInSeconds, staff]
+      properties:
+        accessToken: { type: string }
+        expiresInSeconds: { type: integer, minimum: 1 }
+        staff: { $ref: '#/components/schemas/StaffProfile' }
+    StaffProfile:
+      type: object
+      required: [id, name, role]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        role: { type: string, enum: [TECHNICIAN, MANAGER] }
+        teamId: { type: string }
+    ClassificationResult:
+      type: object
+      additionalProperties: false
+      required: [category, suggestedPriority, suggestedTeamId]
+      properties:
+        category: { type: string }
+        suggestedPriority: { $ref: '#/components/schemas/Priority' }
+        suggestedTeamId: { type: string }
