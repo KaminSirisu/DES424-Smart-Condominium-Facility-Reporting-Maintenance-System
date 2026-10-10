@@ -139,8 +139,9 @@ paths:
       description: >-
         The backend derives reporter identity from a verified LINE token. A 201
         response means the report was stored and a receipt was queued; it does
-        not guarantee that LINE has delivered the receipt. RECEIVED is a draft
-        intake state pending the team's synchronous-vs-asynchronous triage decision.
+        not guarantee that LINE has delivered the receipt. The backend stores
+        the ticket with status RECEIVED before asynchronous AI classification.
+        Priority and team are omitted until the backend validates AI suggestions.
       operationId: createTicket
       security:
         - lineToken: []
@@ -432,7 +433,9 @@ paths:
       summary: Record AI classification suggestions from a trusted worker
       description: >-
         Proposed internal-only callback to satisfy SCFRMS-31. An event or direct
-        Lambda invocation may replace HTTP. Never expose this route to clients.
+        Lambda invocation may replace HTTP. Backend code validates AI suggestions
+        and updates the stored ticket; Bedrock does not write to DynamoDB.
+        Never expose this route to clients.
       operationId: applyClassification
       x-internal: true
       security:
@@ -543,11 +546,13 @@ components:
       enum: [CRITICAL, MEDIUM, LOW]
     TicketStatus:
       type: string
-      description: RECEIVED and MERGED are draft additions to the technician states in the PDF.
+      description: RECEIVED is confirmed for intake; MERGED remains a draft addition.
       enum: [RECEIVED, ASSIGNED, IN_PROGRESS, DONE, MERGED]
     Ticket:
       type: object
-      description: Caller-safe ticket view. No LINE ID, raw S3 key, or password hash.
+      description: >-
+        Caller-safe ticket view. Priority and teamId are absent until triage.
+        No LINE ID, raw S3 key, or password hash is exposed.
       required: [id, zoneId, description, status, createdAt, updatedAt]
       properties:
         id: { type: string }

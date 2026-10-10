@@ -1,6 +1,6 @@
 # API design draft (SCFRMS-31)
 
-This is a **proposed contract for review**, not an approved requirement or an implemented API. The machine-readable draft is [openapi.yaml](openapi.yaml). It uses `/v1` as a proposed base path; the listed resource paths begin with `/tickets`, `/uploads`, and so on.
+This is a **proposed contract for review**, not an implemented API. The reporter intake sequence below was confirmed by the project owner on 2026-10-10; other rules remain draft. The machine-readable draft is [openapi.yaml](openapi.yaml). It uses `/v1` as a proposed base path; the listed resource paths begin with `/tickets`, `/uploads`, and so on.
 
 Sources: the kick-off PDF's functional requirements (FR1–FR5), [SCFRMS-31](https://kaminsirisu.atlassian.net/browse/SCFRMS-31), related Jira tasks, and the repository's [database notes](../database/README.md). Requirements are still being revised. Confluence was not accessible during this review.
 
@@ -35,15 +35,16 @@ There is **no public `/messages` endpoint in this draft**. The stated requiremen
 
 1. LIFF obtains a LINE token. The backend verifies it and derives reporter identity from the token; the request must not supply a trusted LINE user ID.
 2. The client requests an upload URL, uploads the image directly to S3, and calls `POST /tickets` with the resulting upload ID, zone, and description. The API validates the uploaded object before accepting it. A repeated `Idempotency-Key` must not create a second ticket.
-3. Creation returns `201` with status `RECEIVED`. AI classification and routing can run asynchronously. The service later sets `ASSIGNED`, a suggested domain and priority, a team, and a deadline. `RECEIVED` is a proposed intake status; Jira's creation task currently assumes immediate `ASSIGNED`, so this needs a team decision.
-4. Staff may accept or change priority. Staff move `ASSIGNED → IN_PROGRESS → DONE`; completing requires a verified proof image. Invalid transitions return `409`, while missing or invalid proof returns `422`.
-5. A reporter associated with a `DONE` ticket may reopen it. This draft uses `DONE → ASSIGNED` and records a `REOPENED` audit event. The deadline reset policy remains undecided.
-6. Merging marks source tickets `MERGED` and records their canonical ticket ID. The canonical ticket keeps all reporter associations so everyone still sees updates and can access their report. Only same-zone duplicates are eligible; the exact issue-matching rule and SLA handling need approval.
-7. Successful ticket actions produce internal notification events. LINE delivery is asynchronous: a successful API response means the action was saved and notification work was queued, not that LINE delivered a message. Retries must not send duplicates. The manager's deadline alert comes from the SLA worker, not a public API call.
+3. Creation returns `201` with status `RECEIVED` after the backend stores the report, generated ticket ID, verified LINE user ID, and S3 image reference in DynamoDB. Priority and team are absent at this point. This durable intake happens before AI classification.
+4. A background worker sends the description and image to the chosen AI service. Bedrock returns category, priority, and team suggestions; backend code validates them and conditionally updates the ticket with the selected priority, assigned team, deadline, and status `ASSIGNED`. Bedrock does not write directly to DynamoDB. A failed classification must leave the report available for retry or manual triage.
+5. Staff may accept or change priority. Staff move `ASSIGNED → IN_PROGRESS → DONE`; completing requires a verified proof image. Invalid transitions return `409`, while missing or invalid proof returns `422`.
+6. A reporter associated with a `DONE` ticket may reopen it. This draft uses `DONE → ASSIGNED` and records a `REOPENED` audit event. The deadline reset policy remains undecided.
+7. Merging marks source tickets `MERGED` and records their canonical ticket ID. The canonical ticket keeps all reporter associations so everyone still sees updates and can access their report. Only same-zone duplicates are eligible; the exact issue-matching rule and SLA handling need approval.
+8. Successful ticket actions produce internal notification events. LINE delivery is asynchronous: a successful API response means the action was saved and notification work was queued, not that LINE delivered a message. Retries must not send duplicates. The manager's deadline alert comes from the SLA worker, not a public API call.
 
 Reporter and staff screens can poll `GET /tickets/{ticketId}` or the relevant list/dashboard endpoint for fresh state. A push or streaming API is not part of this draft; the refresh policy needs confirmation. The PDF's mobile ticket-creation response target is under 2.5 seconds, which favors returning after durable intake and doing AI triage and LINE delivery asynchronously.
 
-The draft status values are `RECEIVED`, `ASSIGNED`, `IN_PROGRESS`, `DONE`, and `MERGED`. `RECEIVED` and `MERGED` are proposed to model intake and duplicate handling; the PDF explicitly names the technician states `ASSIGNED`, `IN_PROGRESS`, and `DONE`.
+The draft status values are `RECEIVED`, `ASSIGNED`, `IN_PROGRESS`, `DONE`, and `MERGED`. `RECEIVED` is the confirmed intake state. `MERGED` remains proposed for duplicate handling; the PDF explicitly names the technician states `ASSIGNED`, `IN_PROGRESS`, and `DONE`.
 
 ## Access and response rules
 
@@ -59,7 +60,7 @@ An internal event can carry `eventId`, `ticketId`, `kind`, `occurredAt`, and a r
 
 ## Decisions needed before implementation
 
-1. Confirm whether creation responds as `RECEIVED` and triages asynchronously, or creates an already `ASSIGNED` ticket as [SCFRMS-40](https://kaminsirisu.atlassian.net/browse/SCFRMS-40) currently says.
+1. Reconcile [SCFRMS-40](https://kaminsirisu.atlassian.net/browse/SCFRMS-40)'s older immediate-`ASSIGNED` wording with the confirmed `RECEIVED`-then-classify flow. Define AI retry/manual triage and when the SLA clock starts.
 2. Confirm the exact LINE token type, verification flow, and whether all reporter actions happen in LIFF. Confirm staff authentication and role model; the PDF mentions IAM RBAC while the repository proposes staff JWTs.
 3. Approve valid zone, team, domain, and priority codes, plus the SLA matrix and deadline behavior after priority changes, merges, and reopenings ([SCFRMS-27](https://kaminsirisu.atlassian.net/browse/SCFRMS-27)).
 4. Set image formats, size limits, malware/content checks, upload expiry, and when an upload counts as verified ([SCFRMS-36](https://kaminsirisu.atlassian.net/browse/SCFRMS-36)).
