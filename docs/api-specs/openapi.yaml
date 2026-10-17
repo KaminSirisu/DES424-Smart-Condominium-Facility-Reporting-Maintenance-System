@@ -195,6 +195,36 @@ paths:
                 $ref: '#/components/schemas/Ticket'
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{ticketId}/photos/{photoId}/access:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+      - in: path
+        name: photoId
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Tickets]
+      summary: Get temporary access to a ticket photo
+      description: >-
+        The ticket view lists caller-visible photo metadata. An associated
+        reporter may view their own defect photo and repair proof on an
+        associated ticket; authorized staff may view photos within their work
+        scope. The backend checks access before issuing a short-lived read URL.
+        Raw S3 keys are never returned.
+      operationId: getTicketPhotoAccess
+      security:
+        - lineToken: []
+        - staffToken: []
+      responses:
+        '200':
+          description: Temporary read grant for this photo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhotoAccess'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /tickets/{ticketId}/events:
     parameters:
       - $ref: '#/components/parameters/TicketId'
@@ -222,7 +252,11 @@ paths:
       - $ref: '#/components/parameters/TicketId'
     patch:
       tags: [Tickets]
-      summary: Accept or override the suggested priority
+      summary: Change ticket priority with an audit reason
+      description: >-
+        A technician on the assigned team or a manager may change priority.
+        The backend records the actor, previous value, new value, reason, and
+        time. AI classification cannot overwrite a later staff choice.
       operationId: setTicketPriority
       security:
         - staffToken: []
@@ -244,6 +278,65 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /tickets/{ticketId}/accept:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    post:
+      tags: [Tickets]
+      summary: Accept an assigned team ticket as a technician
+      description: >-
+        Only a technician on the assigned team may accept an ASSIGNED ticket.
+        Acceptance records acceptedByStaffId and acceptedAt without changing
+        status. A ticket already accepted by another technician conflicts.
+      operationId: acceptTicket
+      security:
+        - staffToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Ticket accepted and audited.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /tickets/{ticketId}/assignment:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    patch:
+      tags: [Tickets]
+      summary: Reassign an unstarted ticket to another team
+      description: >-
+        Manager only. Reassignment is allowed while ASSIGNED, including after
+        technician acceptance but before work starts. It clears the prior
+        acceptance and records the old team, new team, actor, reason, and time.
+        Reassigning IN_PROGRESS work needs a separate exception policy.
+      operationId: reassignTicket
+      security:
+        - staffToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReassignTicket'
+      responses:
+        '200':
+          description: Team assignment updated and audited.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
   /tickets/{ticketId}/status:
     parameters:
       - $ref: '#/components/parameters/TicketId'
@@ -251,8 +344,10 @@ paths:
       tags: [Tickets]
       summary: Start or finish repair work
       description: >-
-        ASSIGNED -> IN_PROGRESS -> DONE. DONE requires a verified REPAIR_PROOF
-        upload. Completion queues a reporter notification.
+        An accepting technician on the assigned team moves ASSIGNED ->
+        IN_PROGRESS -> DONE. DONE requires a verified REPAIR_PROOF upload.
+        Completion queues a reporter notification. A manager status override,
+        if needed, requires a separate exception policy.
       operationId: setTicketStatus
       security:
         - staffToken: []
@@ -312,8 +407,11 @@ paths:
       tags: [Tickets]
       summary: Merge same-zone duplicate tickets into this ticket
       description: >-
-        Source tickets become MERGED and point to this canonical ticket. All
-        source reporter associations are retained on the canonical ticket.
+        Manager only. The manager confirms the same physical problem, not just
+        the same zone. Source tickets become MERGED and point to this canonical
+        ticket. Their original reports, photos, and audit history remain on
+        those records. All source reporter associations are retained on the
+        canonical ticket.
       operationId: mergeTickets
       security:
         - staffToken: []
@@ -552,19 +650,40 @@ components:
       type: object
       description: >-
         Caller-safe ticket view. Priority and teamId are absent until triage.
-        No LINE ID, raw S3 key, or password hash is exposed.
-      required: [id, zoneId, description, status, createdAt, updatedAt]
+        Photos contains caller-visible metadata, not image bytes or URLs. No
+        LINE ID, raw S3 key, or password hash is exposed.
+      required: [id, zoneId, description, status, repairCycle, photos, createdAt, updatedAt]
       properties:
         id: { type: string }
         zoneId: { type: string }
         description: { type: string }
         status: { $ref: '#/components/schemas/TicketStatus' }
+        repairCycle:
+          type: integer
+          minimum: 1
+          description: Starts at 1 and increments when a completed ticket reopens.
         category: { type: string, description: Maintenance domain after triage. }
         suggestedPriority: { $ref: '#/components/schemas/Priority' }
         priority: { $ref: '#/components/schemas/Priority' }
         teamId: { type: string }
+        acceptedByStaffId:
+          type: string
+          description: >-
+            Staff-visible only; present after a technician accepts the current
+            assignment.
+        acceptedAt: { type: string, format: date-time }
+        photos:
+          type: array
+          description: >-
+            Only metadata this caller may see. DEFECT photos stay attached to
+            their original ticket after a merge; REPAIR_PROOF photos remain
+            available across reopen cycles.
+          items: { $ref: '#/components/schemas/TicketPhoto' }
         deadlineAt: { type: string, format: date-time }
-        completedAt: { type: string, format: date-time }
+        completedAt:
+          type: string
+          format: date-time
+          description: Present only when the current repair cycle is DONE.
         mergedIntoTicketId: { type: string }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -608,10 +727,35 @@ components:
     SetPriority:
       type: object
       additionalProperties: false
-      required: [priority]
+      required: [priority, reason]
       properties:
         priority: { $ref: '#/components/schemas/Priority' }
-        reason: { type: string, maxLength: 1000 }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+    ReassignTicket:
+      type: object
+      additionalProperties: false
+      required: [teamId, reason]
+      properties:
+        teamId: { type: string, minLength: 1 }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+    TicketPhoto:
+      type: object
+      description: Caller-visible metadata for a stored ticket photo.
+      required: [id, purpose, addedAt]
+      properties:
+        id: { type: string }
+        purpose: { type: string, enum: [DEFECT, REPAIR_PROOF] }
+        addedAt: { type: string, format: date-time }
+        repairCycle:
+          type: integer
+          minimum: 1
+          description: Present for a REPAIR_PROOF photo from a repair cycle.
+    PhotoAccess:
+      type: object
+      required: [url, expiresAt]
+      properties:
+        url: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
     SetStatus:
       type: object
       additionalProperties: false
