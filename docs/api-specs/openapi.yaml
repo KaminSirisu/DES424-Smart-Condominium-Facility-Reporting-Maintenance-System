@@ -13,8 +13,6 @@ tags:
     description: Reporting, repair workflow, merge, reopen, and audit history.
   - name: Uploads
     description: Temporary direct-to-S3 image upload grants.
-  - name: Zones
-    description: Reportable facility locations.
   - name: Dashboard
     description: Manager counts and historical analysis.
   - name: Staff auth
@@ -39,28 +37,6 @@ paths:
                   status:
                     type: string
                     const: ok
-  /zones:
-    get:
-      tags: [Zones]
-      summary: List reportable facility zones
-      operationId: listZones
-      security:
-        - lineToken: []
-        - staffToken: []
-      responses:
-        '200':
-          description: Current zone catalog.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [items]
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Zone'
-        '401': { $ref: '#/components/responses/Unauthorized' }
   /uploads:
     post:
       tags: [Uploads]
@@ -110,7 +86,8 @@ paths:
           schema:
             $ref: '#/components/schemas/TicketStatus'
         - in: query
-          name: zoneId
+          name: location
+          description: Match the reporter-entered location text exactly.
           schema: { type: string }
         - in: query
           name: teamId
@@ -154,7 +131,7 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateTicket'
             example:
-              zoneId: LOBBY
+              location: Beside the lobby elevator
               description: Water is leaking beside the elevator.
               defectPhotoUploadId: upl_123
       responses:
@@ -405,13 +382,14 @@ paths:
       - $ref: '#/components/parameters/TicketId'
     post:
       tags: [Tickets]
-      summary: Merge same-zone duplicate tickets into this ticket
+      summary: Merge duplicate tickets into this ticket
       description: >-
-        Manager only. The manager confirms the same physical problem, not just
-        the same zone. Source tickets become MERGED and point to this canonical
-        ticket. Their original reports, photos, and audit history remain on
-        those records. All source reporter associations are retained on the
-        canonical ticket.
+        Manager only. The manager confirms the same physical problem after
+        reviewing the reported free-text locations and issue details; matching
+        location text alone does not establish a duplicate. Source tickets
+        become MERGED and point to this canonical ticket. Their original
+        reports, photos, and audit history remain on those records. All source
+        reporter associations are retained on the canonical ticket.
       operationId: mergeTickets
       security:
         - staffToken: []
@@ -469,7 +447,8 @@ paths:
           required: true
           schema: { type: string, format: date }
         - in: query
-          name: zoneId
+          name: location
+          description: Match the reporter-entered location text exactly.
           schema: { type: string }
       responses:
         '200':
@@ -633,12 +612,6 @@ components:
             code: { type: string }
             message: { type: string }
             requestId: { type: string }
-    Zone:
-      type: object
-      required: [id, name]
-      properties:
-        id: { type: string }
-        name: { type: string }
     Priority:
       type: string
       enum: [CRITICAL, MEDIUM, LOW]
@@ -652,17 +625,30 @@ components:
         Caller-safe ticket view. Priority and teamId are absent until triage.
         Photos contains caller-visible metadata, not image bytes or URLs. No
         LINE ID, raw S3 key, or password hash is exposed.
-      required: [id, zoneId, description, status, repairCycle, photos, createdAt, updatedAt]
+      required:
+        [
+          id,
+          location,
+          description,
+          status,
+          repairCycle,
+          photos,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string }
-        zoneId: { type: string }
+        location:
+          type: string
+          description: Reporter-entered free text; no location ID or catalog lookup.
         description: { type: string }
         status: { $ref: '#/components/schemas/TicketStatus' }
         repairCycle:
           type: integer
           minimum: 1
           description: Starts at 1 and increments when a completed ticket reopens.
-        category: { type: string, description: Maintenance domain after triage. }
+        category:
+          { type: string, description: Maintenance domain after triage. }
         suggestedPriority: { $ref: '#/components/schemas/Priority' }
         priority: { $ref: '#/components/schemas/Priority' }
         teamId: { type: string }
@@ -698,9 +684,12 @@ components:
     CreateTicket:
       type: object
       additionalProperties: false
-      required: [zoneId, description, defectPhotoUploadId]
+      required: [location, description, defectPhotoUploadId]
       properties:
-        zoneId: { type: string }
+        location:
+          type: string
+          minLength: 1
+          description: Free text entered by the reporter; no location ID or catalog lookup.
         description: { type: string, minLength: 1, maxLength: 2000 }
         defectPhotoUploadId: { type: string }
     UploadIntent:
@@ -711,7 +700,11 @@ components:
         purpose:
           type: string
           enum: [DEFECT, REPAIR_PROOF]
-        contentType: { type: string, description: Allowed image MIME type; exact list is open. }
+        contentType:
+          {
+            type: string,
+            description: Allowed image MIME type; exact list is open.,
+          }
         sizeBytes: { type: integer, minimum: 1 }
     UploadGrant:
       type: object
@@ -802,7 +795,8 @@ components:
         nextCursor: { type: string }
     DashboardSummary:
       type: object
-      required: [openCount, overdueCount, countsByStatus, teamWorkloads, generatedAt]
+      required:
+        [openCount, overdueCount, countsByStatus, teamWorkloads, generatedAt]
       properties:
         openCount: { type: integer, minimum: 0 }
         overdueCount: { type: integer, minimum: 0 }
@@ -820,17 +814,18 @@ components:
         generatedAt: { type: string, format: date-time }
     DashboardHistory:
       type: object
-      required: [from, to, zoneBreakdown]
+      required: [from, to, locationBreakdown]
       properties:
         from: { type: string, format: date }
         to: { type: string, format: date }
-        zoneBreakdown:
+        locationBreakdown:
           type: array
+          description: Groups exact reporter-entered location strings; spelling variants remain separate.
           items:
             type: object
-            required: [zoneId, reportedCount, completedCount]
+            required: [location, reportedCount, completedCount]
             properties:
-              zoneId: { type: string }
+              location: { type: string }
               reportedCount: { type: integer, minimum: 0 }
               completedCount: { type: integer, minimum: 0 }
     StaffSession:

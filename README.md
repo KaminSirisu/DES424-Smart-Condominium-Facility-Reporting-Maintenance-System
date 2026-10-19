@@ -36,7 +36,7 @@ Each app and major area has its own README describing its responsibilities. Empt
 
 ## Intended user journeys
 
-1. A reporter opens the LIFF app, selects a facility zone, describes the issue, and uploads a photo without creating a separate account.
+1. A reporter opens the LIFF app, types the location as free text, describes the issue, and uploads a photo without creating a separate account.
 2. The backend creates a ticket, suggests category and priority, sets a deadline, and sends a submission receipt.
 3. Staff sign in with email and password, review tickets, adjust priority, update status, and upload repair proof before completion.
 4. Reporters receive status updates and can reopen an unresolved ticket. Managers see ticket counts, overdue work, and repair history.

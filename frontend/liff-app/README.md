@@ -1,6 +1,6 @@
 # LIFF reporter app
 
-This app will let reporters select a facility zone, describe a defect, attach a photo, submit a report, view progress, and reopen an unresolved ticket. It should work well on a phone inside LINE.
+This app will let reporters type a location in a free-text field, describe a defect, attach a photo, submit a report, view progress, and reopen an unresolved ticket. It should work well on a phone inside LINE.
 
 Planned folders:
 
