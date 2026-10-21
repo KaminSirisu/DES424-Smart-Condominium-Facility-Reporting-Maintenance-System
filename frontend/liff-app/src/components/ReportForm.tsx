@@ -4,16 +4,20 @@ import SubmitButton from './SubmitButton';
 import { submitReport } from '../services/api';
 import check from '../assets/check.png';
 
+const MAX_LOCATION_LENGTH = 100;
 const MIN_DESCRIPTION_LENGTH = 10;
 const MAX_DESCRIPTION_LENGTH = 500;
 
 type FormErrors = {
+  location?: string;
   image?: string;
   description?: string;
 };
 
 export default function ReportForm() {
+  const locationId = useId();
   const descriptionId = useId();
+  const [location, setLocation] = useState('');
   const [image, setImage] = useState<File | null>(null);
   const [description, setDescription] = useState('');
   const [errors, setErrors] = useState<FormErrors>({});
@@ -21,6 +25,10 @@ export default function ReportForm() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
 
+  function handleLocationChange(value: string) {
+    setLocation(value);
+    setErrors((prev) => ({ ...prev, location: undefined }));
+  }
   function handleImageChange(file: File | null) {
     setImage(file);
     setErrors((prev) => ({ ...prev, image: undefined }));
@@ -31,14 +39,18 @@ export default function ReportForm() {
   }
   function validateForm(): FormErrors {
     const next: FormErrors = {};
-    const trimmed = description.trim();
+    const locationTrimmed = location.trim();
+    const descriptionTrimmed = description.trim();
 
+    if (!locationTrimmed) {
+      next.location = 'Please enter the location.';
+    }
     if (!image) {
       next.image = 'Please add a photo of the problem.';
     }
-    if (!trimmed) {
+    if (!descriptionTrimmed) {
       next.description = 'Please describe the problem.';
-    } else if (trimmed.length < MIN_DESCRIPTION_LENGTH) {
+    } else if (descriptionTrimmed.length < MIN_DESCRIPTION_LENGTH) {
       next.description = `Please add a bit more detail (at least ${MIN_DESCRIPTION_LENGTH} characters).`;
     }
     return next;
@@ -55,7 +67,11 @@ export default function ReportForm() {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await submitReport({ image, description: description.trim() });
+      await submitReport({
+        location: location.trim(),
+        image,
+        description: description.trim(),
+      });
       setSubmitted(true);
     } catch (error) {
       console.error('Error submitting report:', error);
@@ -66,6 +82,7 @@ export default function ReportForm() {
   }
 
   function handleReportAnother() {
+    setLocation('');
     setImage(null);
     setDescription('');
     setErrors({});
@@ -96,6 +113,24 @@ export default function ReportForm() {
   return (
     <form onSubmit={handleSubmit} noValidate className="space-y-5">
       <div>
+        <label htmlFor={locationId} className="mb-1 block text-sm font-medium">
+          Incident Location
+        </label>
+        <input
+          id={locationId}
+          value={location}
+          onChange={(event) => handleLocationChange(event.target.value)}
+          maxLength={MAX_LOCATION_LENGTH}
+          placeholder="e.g. Building A, passenger lift, floor 5"
+          className="w-full rounded-lg border-slate-300 border bg-white p-2 text-base placeholder:text-sm focus:border-[#06C755] focus:outline-none"
+        />
+        {errors.location && (
+          <p className="mt-1 text-sm text-red-700" role="alert">
+            {errors.location}
+          </p>
+        )}
+      </div>
+      <div>
         <ImageUpload file={image} onChange={handleImageChange} />
         {errors.image && (
           <p className="mt-1 text-sm text-red-700" role="alert">
@@ -116,8 +151,8 @@ export default function ReportForm() {
           onChange={(event) => handleDescriptionChange(event.target.value)}
           maxLength={MAX_DESCRIPTION_LENGTH}
           rows={4}
-          placeholder="Describe the problem, e.g. the lift on floor 3 makes a loud noise"
-          className="w-full rounded-lg border border-slate-300 bg-white p-3 text-base focus:border-[#06C755] focus:outline-none"
+          placeholder="Describe the problem, e.g., the lift on floor 3 makes a loud noise"
+          className="w-full rounded-lg border border-slate-300 bg-white p-3 text-base placeholder:text-sm focus:border-[#06C755] focus:outline-none"
         />
         <div className="mt-1 flex justify-between text-xs">
           <span className="text-red-700" role="alert">
