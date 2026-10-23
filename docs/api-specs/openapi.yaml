@@ -382,14 +382,16 @@ paths:
       - $ref: '#/components/parameters/TicketId'
     post:
       tags: [Tickets]
-      summary: Merge duplicate tickets into this ticket
+      summary: Merge duplicate tickets into this ticket as a technician
       description: >-
-        Manager only. The manager confirms the same physical problem after
+        An authorized technician confirms the same physical problem after
         reviewing the reported free-text locations and issue details; matching
-        location text alone does not establish a duplicate. Source tickets
-        become MERGED and point to this canonical ticket. Their original
-        reports, photos, and audit history remain on those records. All source
-        reporter associations are retained on the canonical ticket.
+        location text alone does not establish a duplicate. The technician must
+        have access to the canonical and source tickets; cross-team merge rules
+        still need approval. Source tickets become MERGED and point to this
+        canonical ticket. Their original reports, photos, and audit history
+        remain on those records. All source reporter associations are retained
+        on the canonical ticket.
       operationId: mergeTickets
       security:
         - staffToken: []
@@ -418,6 +420,10 @@ paths:
     get:
       tags: [Dashboard]
       summary: Read current manager dashboard counts
+      description: >-
+        Managers monitor current tickets and team workloads. Team count and
+        priority-based SLA durations are not fixed in this draft; overdueCount
+        becomes meaningful only after the SLA policy is approved.
       operationId: getDashboardSummary
       security:
         - staffToken: []
@@ -433,26 +439,42 @@ paths:
   /dashboard/history:
     get:
       tags: [Dashboard]
-      summary: Read historical repair data
+      summary: List current and previous tickets with repair totals
+      description: >-
+        Manager view across all current and previous ticket records, including
+        RECEIVED, ASSIGNED, IN_PROGRESS, DONE, reopened, and MERGED tickets.
+        Optional dates filter by ticket creation time. Summary counts cover all
+        matching records, while items are paginated. Detailed status changes,
+        earlier repair cycles, and proof photos are available through each
+        ticket's events and photo-access endpoints.
       operationId: getDashboardHistory
       security:
         - staffToken: []
       parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
         - in: query
           name: from
-          required: true
+          description: Optional createdAt lower bound, inclusive.
           schema: { type: string, format: date }
         - in: query
           name: to
-          required: true
+          description: Optional createdAt upper bound, inclusive.
           schema: { type: string, format: date }
+        - in: query
+          name: status
+          schema:
+            $ref: '#/components/schemas/TicketStatus'
         - in: query
           name: location
           description: Match the reporter-entered location text exactly.
           schema: { type: string }
+        - in: query
+          name: teamId
+          schema: { type: string }
       responses:
         '200':
-          description: Historical aggregates for the requested period.
+          description: Matching ticket records and their aggregate counts.
           content:
             application/json:
               schema:
@@ -665,7 +687,10 @@ components:
             their original ticket after a merge; REPAIR_PROOF photos remain
             available across reopen cycles.
           items: { $ref: '#/components/schemas/TicketPhoto' }
-        deadlineAt: { type: string, format: date-time }
+        deadlineAt:
+          type: string
+          format: date-time
+          description: Present when an approved SLA policy has set a deadline.
         completedAt:
           type: string
           format: date-time
@@ -777,6 +802,10 @@ components:
           items: { type: string }
     TicketEvent:
       type: object
+      description: >-
+        Structured audit data supports repair logs across completion, reopening,
+        reassignment, priority changes, and merges. Fields apply only to the
+        relevant event kind; proofPhotoId refers to ticket photo metadata.
       required: [id, ticketId, kind, occurredAt]
       properties:
         id: { type: string }
@@ -784,6 +813,15 @@ components:
         kind: { type: string }
         occurredAt: { type: string, format: date-time }
         actorType: { type: string, enum: [REPORTER, STAFF, SYSTEM] }
+        actorStaffId: { type: string }
+        fromStatus: { $ref: '#/components/schemas/TicketStatus' }
+        toStatus: { $ref: '#/components/schemas/TicketStatus' }
+        fromPriority: { $ref: '#/components/schemas/Priority' }
+        toPriority: { $ref: '#/components/schemas/Priority' }
+        fromTeamId: { type: string }
+        toTeamId: { type: string }
+        repairCycle: { type: integer, minimum: 1 }
+        proofPhotoId: { type: string }
         note: { type: string }
     TicketEventPage:
       type: object
@@ -795,11 +833,16 @@ components:
         nextCursor: { type: string }
     DashboardSummary:
       type: object
-      required:
-        [openCount, overdueCount, countsByStatus, teamWorkloads, generatedAt]
+      required: [openCount, countsByStatus, teamWorkloads, generatedAt]
       properties:
-        openCount: { type: integer, minimum: 0 }
-        overdueCount: { type: integer, minimum: 0 }
+        openCount:
+          type: integer
+          minimum: 0
+          description: Current RECEIVED, ASSIGNED, and IN_PROGRESS tickets.
+        overdueCount:
+          type: integer
+          minimum: 0
+          description: Omitted until SLA durations and countdown rules are approved.
         countsByStatus:
           type: object
           additionalProperties: { type: integer, minimum: 0 }
@@ -814,20 +857,76 @@ components:
         generatedAt: { type: string, format: date-time }
     DashboardHistory:
       type: object
-      required: [from, to, locationBreakdown]
+      required: [items, summary, generatedAt]
       properties:
-        from: { type: string, format: date }
-        to: { type: string, format: date }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TicketHistoryEntry' }
+        summary: { $ref: '#/components/schemas/HistorySummary' }
+        nextCursor: { type: string }
+        generatedAt: { type: string, format: date-time }
+    TicketHistoryEntry:
+      type: object
+      description: >-
+        Current ticket state plus counts of earlier repair activity. Fetch the
+        ticket's events for the full repair log, including previous DONE cycles.
+      required: [ticket, completionCount, reopenCount]
+      properties:
+        ticket: { $ref: '#/components/schemas/Ticket' }
+        completionCount: { type: integer, minimum: 0 }
+        reopenCount: { type: integer, minimum: 0 }
+        lastCompletedAt: { type: string, format: date-time }
+    HistorySummary:
+      type: object
+      description: >-
+        Counts across all matching ticket records, not just the current page.
+        Completion and reopen counts include earlier cycles of the same ticket.
+        Merged source and canonical tickets are separate records in totalTickets.
+        Priority and team maps use the values actually assigned; no fixed team
+        count or SLA duration is assumed.
+      required:
+        [
+          totalTickets,
+          countsByStatus,
+          countsByPriority,
+          countsByTeam,
+          locationBreakdown,
+          completionCount,
+          reopenCount,
+        ]
+      properties:
+        totalTickets: { type: integer, minimum: 0 }
+        countsByStatus:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        countsByPriority:
+          type: object
+          description: Excludes tickets still awaiting priority assignment.
+          additionalProperties: { type: integer, minimum: 0 }
+        countsByTeam:
+          type: object
+          description: Excludes tickets still awaiting team assignment.
+          additionalProperties: { type: integer, minimum: 0 }
         locationBreakdown:
           type: array
-          description: Groups exact reporter-entered location strings; spelling variants remain separate.
+          description: >-
+            Groups exact reporter-entered location strings; spelling variants
+            remain separate.
           items:
             type: object
             required: [location, reportedCount, completedCount]
             properties:
               location: { type: string }
-              reportedCount: { type: integer, minimum: 0 }
-              completedCount: { type: integer, minimum: 0 }
+              reportedCount:
+                type: integer
+                minimum: 0
+                description: Ticket records with this exact location.
+              completedCount:
+                type: integer
+                minimum: 0
+                description: Ticket records with at least one DONE event.
+        completionCount: { type: integer, minimum: 0 }
+        reopenCount: { type: integer, minimum: 0 }
     StaffSession:
       type: object
       required: [accessToken, expiresInSeconds, staff]
