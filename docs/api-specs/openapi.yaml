@@ -1,0 +1,952 @@
+openapi: 3.1.0
+info:
+  title: Smart Condominium Facility Reporting API
+  version: 0.1.0-draft
+  description: >-
+    Proposed contract for SCFRMS-31. Paths and rules are subject to team review;
+    no endpoint in this file is implemented by this design task. Automated LINE
+    notifications are triggered by ticket events, so there is no public /messages path.
+servers:
+  - url: /v1
+tags:
+  - name: Tickets
+    description: Reporting, repair workflow, merge, reopen, and audit history.
+  - name: Uploads
+    description: Temporary direct-to-S3 image upload grants.
+  - name: Dashboard
+    description: Manager counts and historical analysis.
+  - name: Staff auth
+    description: Proposed staff session contract pending security review.
+  - name: Internal
+    description: Trusted worker contract, never available to browsers.
+paths:
+  /health:
+    get:
+      summary: Check API health
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: Service is responding.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /uploads:
+    post:
+      tags: [Uploads]
+      summary: Request a short-lived image upload URL
+      description: >-
+        Reporters may request DEFECT uploads; authorized staff may request
+        REPAIR_PROOF uploads. A later ticket action verifies the uploaded object,
+        its purpose, and its owner before accepting the uploadId.
+      operationId: createUploadIntent
+      security:
+        - lineToken: []
+        - staffToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadIntent'
+      responses:
+        '201':
+          description: Temporary direct-to-S3 upload grant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadGrant'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /tickets:
+    get:
+      tags: [Tickets]
+      summary: List tickets visible to the caller
+      description: >-
+        Reporter results are restricted to that verified LINE identity, including
+        associations retained after a merge. Staff may use filters within their
+        authorized scope. A ticket ID or filter never bypasses authorization.
+      operationId: listTickets
+      security:
+        - lineToken: []
+        - staffToken: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - in: query
+          name: status
+          schema:
+            $ref: '#/components/schemas/TicketStatus'
+        - in: query
+          name: location
+          description: Match the reporter-entered location text exactly.
+          schema: { type: string }
+        - in: query
+          name: teamId
+          description: Staff filter only.
+          schema: { type: string }
+        - in: query
+          name: completedFrom
+          description: Staff-only lower bound for completedAt, inclusive.
+          schema: { type: string, format: date }
+        - in: query
+          name: completedTo
+          description: Staff-only upper bound for completedAt, inclusive.
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: A page of visible tickets.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketPage'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Tickets]
+      summary: Submit a facility defect report
+      description: >-
+        The backend derives reporter identity from a verified LINE token. A 201
+        response means the report was stored and a receipt was queued; it does
+        not guarantee that LINE has delivered the receipt. The backend stores
+        the ticket with status RECEIVED before asynchronous AI classification.
+        Priority and team are omitted until the backend validates AI suggestions.
+      operationId: createTicket
+      security:
+        - lineToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTicket'
+            example:
+              location: Beside the lobby elevator
+              description: Water is leaking beside the elevator.
+              defectPhotoUploadId: upl_123
+      responses:
+        '201':
+          description: Ticket stored; triage and notification may continue asynchronously.
+          headers:
+            Location:
+              schema: { type: string }
+              description: Relative URL of the new ticket.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /tickets/{ticketId}:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    get:
+      tags: [Tickets]
+      summary: Get a ticket visible to the caller
+      description: >-
+        A merged source remains discoverable by an associated reporter and
+        includes mergedIntoTicketId. Raw LINE IDs and S3 keys are never returned.
+      operationId: getTicket
+      security:
+        - lineToken: []
+        - staffToken: []
+      responses:
+        '200':
+          description: Current ticket view.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{ticketId}/photos/{photoId}/access:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+      - in: path
+        name: photoId
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Tickets]
+      summary: Get temporary access to a ticket photo
+      description: >-
+        The ticket view lists caller-visible photo metadata. An associated
+        reporter may view their own defect photo and repair proof on an
+        associated ticket; authorized staff may view photos within their work
+        scope. The backend checks access before issuing a short-lived read URL.
+        Raw S3 keys are never returned.
+      operationId: getTicketPhotoAccess
+      security:
+        - lineToken: []
+        - staffToken: []
+      responses:
+        '200':
+          description: Temporary read grant for this photo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhotoAccess'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{ticketId}/events:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    get:
+      tags: [Tickets]
+      summary: Read ticket audit events
+      operationId: listTicketEvents
+      security:
+        - staffToken: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Audit events in time order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketEventPage'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{ticketId}/priority:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    patch:
+      tags: [Tickets]
+      summary: Change ticket priority with an audit reason
+      description: >-
+        A technician on the assigned team or a manager may change priority.
+        The backend records the actor, previous value, new value, reason, and
+        time. AI classification cannot overwrite a later staff choice.
+      operationId: setTicketPriority
+      security:
+        - staffToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetPriority'
+      responses:
+        '200':
+          description: Priority updated and audited.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /tickets/{ticketId}/accept:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    post:
+      tags: [Tickets]
+      summary: Accept an assigned team ticket as a technician
+      description: >-
+        Only a technician on the assigned team may accept an ASSIGNED ticket.
+        Acceptance records acceptedByStaffId and acceptedAt without changing
+        status. A ticket already accepted by another technician conflicts.
+      operationId: acceptTicket
+      security:
+        - staffToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Ticket accepted and audited.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /tickets/{ticketId}/assignment:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    patch:
+      tags: [Tickets]
+      summary: Reassign an unstarted ticket to another team
+      description: >-
+        Manager only. Reassignment is allowed while ASSIGNED, including after
+        technician acceptance but before work starts. It clears the prior
+        acceptance and records the old team, new team, actor, reason, and time.
+        Reassigning IN_PROGRESS work needs a separate exception policy.
+      operationId: reassignTicket
+      security:
+        - staffToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReassignTicket'
+      responses:
+        '200':
+          description: Team assignment updated and audited.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /tickets/{ticketId}/status:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    patch:
+      tags: [Tickets]
+      summary: Start or finish repair work
+      description: >-
+        An accepting technician on the assigned team moves ASSIGNED ->
+        IN_PROGRESS -> DONE. DONE requires a verified REPAIR_PROOF upload.
+        Completion queues a reporter notification. A manager status override,
+        if needed, requires a separate exception policy.
+      operationId: setTicketStatus
+      security:
+        - staffToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetStatus'
+      responses:
+        '200':
+          description: Status updated and audited.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /tickets/{ticketId}/reopen:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    post:
+      tags: [Tickets]
+      summary: Reopen an unresolved repair
+      description: >-
+        An associated reporter may reopen DONE -> ASSIGNED. A REOPENED audit
+        event is recorded. Deadline reset behavior is not approved yet.
+      operationId: reopenTicket
+      security:
+        - lineToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReopenTicket'
+      responses:
+        '200':
+          description: Ticket reopened.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /tickets/{ticketId}/merge:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    post:
+      tags: [Tickets]
+      summary: Merge duplicate tickets into this ticket as a technician
+      description: >-
+        An authorized technician confirms the same physical problem after
+        reviewing the reported free-text locations and issue details; matching
+        location text alone does not establish a duplicate. The technician must
+        have access to the canonical and source tickets; cross-team merge rules
+        still need approval. Source tickets become MERGED and point to this
+        canonical ticket. Their original reports, photos, and audit history
+        remain on those records. All source reporter associations are retained
+        on the canonical ticket.
+      operationId: mergeTickets
+      security:
+        - staffToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MergeTickets'
+      responses:
+        '200':
+          description: Canonical ticket after merge.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /dashboard/summary:
+    get:
+      tags: [Dashboard]
+      summary: Read current manager dashboard counts
+      description: >-
+        Managers monitor current tickets and team workloads. Team count and
+        priority-based SLA durations are not fixed in this draft; overdueCount
+        becomes meaningful only after the SLA policy is approved.
+      operationId: getDashboardSummary
+      security:
+        - staffToken: []
+      responses:
+        '200':
+          description: Current counts, overdue work, and team workloads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardSummary'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /dashboard/history:
+    get:
+      tags: [Dashboard]
+      summary: List current and previous tickets with repair totals
+      description: >-
+        Manager view across all current and previous ticket records, including
+        RECEIVED, ASSIGNED, IN_PROGRESS, DONE, reopened, and MERGED tickets.
+        Optional dates filter by ticket creation time. Summary counts cover all
+        matching records, while items are paginated. Detailed status changes,
+        earlier repair cycles, and proof photos are available through each
+        ticket's events and photo-access endpoints.
+      operationId: getDashboardHistory
+      security:
+        - staffToken: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - in: query
+          name: from
+          description: Optional createdAt lower bound, inclusive.
+          schema: { type: string, format: date }
+        - in: query
+          name: to
+          description: Optional createdAt upper bound, inclusive.
+          schema: { type: string, format: date }
+        - in: query
+          name: status
+          schema:
+            $ref: '#/components/schemas/TicketStatus'
+        - in: query
+          name: location
+          description: Match the reporter-entered location text exactly.
+          schema: { type: string }
+        - in: query
+          name: teamId
+          schema: { type: string }
+      responses:
+        '200':
+          description: Matching ticket records and their aggregate counts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardHistory'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/staff/login:
+    post:
+      tags: [Staff auth]
+      summary: Start a staff session (auth approach pending approval)
+      operationId: loginStaff
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Short-lived staff token; exact session model is open.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffSession'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/staff/me:
+    get:
+      tags: [Staff auth]
+      summary: Read the current staff identity and role
+      operationId: getCurrentStaff
+      security:
+        - staffToken: []
+      responses:
+        '200':
+          description: Safe staff profile without password hash.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffProfile'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /internal/tickets/{ticketId}/classification:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    post:
+      tags: [Internal]
+      summary: Record AI classification suggestions from a trusted worker
+      description: >-
+        Proposed internal-only callback to satisfy SCFRMS-31. An event or direct
+        Lambda invocation may replace HTTP. Backend code validates AI suggestions
+        and updates the stored ticket; Bedrock does not write to DynamoDB.
+        Never expose this route to clients.
+      operationId: applyClassification
+      x-internal: true
+      security:
+        - serviceIam: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassificationResult'
+      responses:
+        '204': { description: Suggestions recorded and routing initiated. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+components:
+  securitySchemes:
+    lineToken:
+      type: http
+      scheme: bearer
+      description: Verified LINE credential from LIFF; exact token type is pending review.
+    staffToken:
+      type: http
+      scheme: bearer
+      description: Staff credential with backend role checks; session design is pending review.
+    serviceIam:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: Internal AWS-signed authorization placeholder; never a client token.
+  parameters:
+    TicketId:
+      in: path
+      name: ticketId
+      required: true
+      schema: { type: string }
+    Cursor:
+      in: query
+      name: cursor
+      schema: { type: string }
+    Limit:
+      in: query
+      name: limit
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      description: Stable unique key for one intended action and its retries.
+      schema: { type: string, minLength: 8, maxLength: 128 }
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unauthorized:
+      description: Missing or invalid credential.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Forbidden:
+      description: Authenticated caller lacks permission.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: Resource not found or hidden from the caller.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Conflict:
+      description: Current ticket state or idempotency key conflicts with this action.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unprocessable:
+      description: Validation failed, such as an unverified upload or missing repair proof.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    TooManyRequests:
+      description: Caller exceeded a rate limit.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            requestId: { type: string }
+    Priority:
+      type: string
+      enum: [CRITICAL, MEDIUM, LOW]
+    TicketStatus:
+      type: string
+      description: RECEIVED is confirmed for intake; MERGED remains a draft addition.
+      enum: [RECEIVED, ASSIGNED, IN_PROGRESS, DONE, MERGED]
+    Ticket:
+      type: object
+      description: >-
+        Caller-safe ticket view. Priority and teamId are absent until triage.
+        Photos contains caller-visible metadata, not image bytes or URLs. No
+        LINE ID, raw S3 key, or password hash is exposed.
+      required:
+        [
+          id,
+          location,
+          description,
+          status,
+          repairCycle,
+          photos,
+          createdAt,
+          updatedAt,
+        ]
+      properties:
+        id: { type: string }
+        location:
+          type: string
+          description: Reporter-entered free text; no location ID or catalog lookup.
+        description: { type: string }
+        status: { $ref: '#/components/schemas/TicketStatus' }
+        repairCycle:
+          type: integer
+          minimum: 1
+          description: Starts at 1 and increments when a completed ticket reopens.
+        category:
+          { type: string, description: Maintenance domain after triage. }
+        suggestedPriority: { $ref: '#/components/schemas/Priority' }
+        priority: { $ref: '#/components/schemas/Priority' }
+        teamId: { type: string }
+        acceptedByStaffId:
+          type: string
+          description: >-
+            Staff-visible only; present after a technician accepts the current
+            assignment.
+        acceptedAt: { type: string, format: date-time }
+        photos:
+          type: array
+          description: >-
+            Only metadata this caller may see. DEFECT photos stay attached to
+            their original ticket after a merge; REPAIR_PROOF photos remain
+            available across reopen cycles.
+          items: { $ref: '#/components/schemas/TicketPhoto' }
+        deadlineAt:
+          type: string
+          format: date-time
+          description: Present when an approved SLA policy has set a deadline.
+        completedAt:
+          type: string
+          format: date-time
+          description: Present only when the current repair cycle is DONE.
+        mergedIntoTicketId: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    TicketPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Ticket' }
+        nextCursor: { type: string }
+    CreateTicket:
+      type: object
+      additionalProperties: false
+      required: [location, description, defectPhotoUploadId]
+      properties:
+        location:
+          type: string
+          minLength: 1
+          description: Free text entered by the reporter; no location ID or catalog lookup.
+        description: { type: string, minLength: 1, maxLength: 2000 }
+        defectPhotoUploadId: { type: string }
+    UploadIntent:
+      type: object
+      additionalProperties: false
+      required: [purpose, contentType, sizeBytes]
+      properties:
+        purpose:
+          type: string
+          enum: [DEFECT, REPAIR_PROOF]
+        contentType:
+          {
+            type: string,
+            description: Allowed image MIME type; exact list is open.,
+          }
+        sizeBytes: { type: integer, minimum: 1 }
+    UploadGrant:
+      type: object
+      required: [uploadId, uploadUrl, method, headers, expiresAt]
+      properties:
+        uploadId: { type: string }
+        uploadUrl: { type: string, format: uri }
+        method: { type: string, const: PUT }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+        expiresAt: { type: string, format: date-time }
+    SetPriority:
+      type: object
+      additionalProperties: false
+      required: [priority, reason]
+      properties:
+        priority: { $ref: '#/components/schemas/Priority' }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+    ReassignTicket:
+      type: object
+      additionalProperties: false
+      required: [teamId, reason]
+      properties:
+        teamId: { type: string, minLength: 1 }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+    TicketPhoto:
+      type: object
+      description: Caller-visible metadata for a stored ticket photo.
+      required: [id, purpose, addedAt]
+      properties:
+        id: { type: string }
+        purpose: { type: string, enum: [DEFECT, REPAIR_PROOF] }
+        addedAt: { type: string, format: date-time }
+        repairCycle:
+          type: integer
+          minimum: 1
+          description: Present for a REPAIR_PROOF photo from a repair cycle.
+    PhotoAccess:
+      type: object
+      required: [url, expiresAt]
+      properties:
+        url: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+    SetStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [IN_PROGRESS, DONE]
+        proofPhotoUploadId:
+          type: string
+          description: Required when status is DONE; verified as REPAIR_PROOF.
+    ReopenTicket:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: string, maxLength: 1000 }
+    MergeTickets:
+      type: object
+      additionalProperties: false
+      required: [sourceTicketIds]
+      properties:
+        sourceTicketIds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string }
+    TicketEvent:
+      type: object
+      description: >-
+        Structured audit data supports repair logs across completion, reopening,
+        reassignment, priority changes, and merges. Fields apply only to the
+        relevant event kind; proofPhotoId refers to ticket photo metadata.
+      required: [id, ticketId, kind, occurredAt]
+      properties:
+        id: { type: string }
+        ticketId: { type: string }
+        kind: { type: string }
+        occurredAt: { type: string, format: date-time }
+        actorType: { type: string, enum: [REPORTER, STAFF, SYSTEM] }
+        actorStaffId: { type: string }
+        fromStatus: { $ref: '#/components/schemas/TicketStatus' }
+        toStatus: { $ref: '#/components/schemas/TicketStatus' }
+        fromPriority: { $ref: '#/components/schemas/Priority' }
+        toPriority: { $ref: '#/components/schemas/Priority' }
+        fromTeamId: { type: string }
+        toTeamId: { type: string }
+        repairCycle: { type: integer, minimum: 1 }
+        proofPhotoId: { type: string }
+        note: { type: string }
+    TicketEventPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TicketEvent' }
+        nextCursor: { type: string }
+    DashboardSummary:
+      type: object
+      required: [openCount, countsByStatus, teamWorkloads, generatedAt]
+      properties:
+        openCount:
+          type: integer
+          minimum: 0
+          description: Current RECEIVED, ASSIGNED, and IN_PROGRESS tickets.
+        overdueCount:
+          type: integer
+          minimum: 0
+          description: Omitted until SLA durations and countdown rules are approved.
+        countsByStatus:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        teamWorkloads:
+          type: array
+          items:
+            type: object
+            required: [teamId, openCount]
+            properties:
+              teamId: { type: string }
+              openCount: { type: integer, minimum: 0 }
+        generatedAt: { type: string, format: date-time }
+    DashboardHistory:
+      type: object
+      required: [items, summary, generatedAt]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TicketHistoryEntry' }
+        summary: { $ref: '#/components/schemas/HistorySummary' }
+        nextCursor: { type: string }
+        generatedAt: { type: string, format: date-time }
+    TicketHistoryEntry:
+      type: object
+      description: >-
+        Current ticket state plus counts of earlier repair activity. Fetch the
+        ticket's events for the full repair log, including previous DONE cycles.
+      required: [ticket, completionCount, reopenCount]
+      properties:
+        ticket: { $ref: '#/components/schemas/Ticket' }
+        completionCount: { type: integer, minimum: 0 }
+        reopenCount: { type: integer, minimum: 0 }
+        lastCompletedAt: { type: string, format: date-time }
+    HistorySummary:
+      type: object
+      description: >-
+        Counts across all matching ticket records, not just the current page.
+        Completion and reopen counts include earlier cycles of the same ticket.
+        Merged source and canonical tickets are separate records in totalTickets.
+        Priority and team maps use the values actually assigned; no fixed team
+        count or SLA duration is assumed.
+      required:
+        [
+          totalTickets,
+          countsByStatus,
+          countsByPriority,
+          countsByTeam,
+          locationBreakdown,
+          completionCount,
+          reopenCount,
+        ]
+      properties:
+        totalTickets: { type: integer, minimum: 0 }
+        countsByStatus:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        countsByPriority:
+          type: object
+          description: Excludes tickets still awaiting priority assignment.
+          additionalProperties: { type: integer, minimum: 0 }
+        countsByTeam:
+          type: object
+          description: Excludes tickets still awaiting team assignment.
+          additionalProperties: { type: integer, minimum: 0 }
+        locationBreakdown:
+          type: array
+          description: >-
+            Groups exact reporter-entered location strings; spelling variants
+            remain separate.
+          items:
+            type: object
+            required: [location, reportedCount, completedCount]
+            properties:
+              location: { type: string }
+              reportedCount:
+                type: integer
+                minimum: 0
+                description: Ticket records with this exact location.
+              completedCount:
+                type: integer
+                minimum: 0
+                description: Ticket records with at least one DONE event.
+        completionCount: { type: integer, minimum: 0 }
+        reopenCount: { type: integer, minimum: 0 }
+    StaffSession:
+      type: object
+      required: [accessToken, expiresInSeconds, staff]
+      properties:
+        accessToken: { type: string }
+        expiresInSeconds: { type: integer, minimum: 1 }
+        staff: { $ref: '#/components/schemas/StaffProfile' }
+    StaffProfile:
+      type: object
+      required: [id, name, role]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        role: { type: string, enum: [TECHNICIAN, MANAGER] }
+        teamId: { type: string }
+    ClassificationResult:
+      type: object
+      additionalProperties: false
+      required: [category, suggestedPriority, suggestedTeamId]
+      properties:
+        category: { type: string }
+        suggestedPriority: { $ref: '#/components/schemas/Priority' }
+        suggestedTeamId: { type: string }

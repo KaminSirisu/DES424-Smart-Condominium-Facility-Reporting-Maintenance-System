@@ -1,8 +1,10 @@
 # Database design
 
-Document DynamoDB tables, partition/sort keys, indexes, and access patterns before implementing data helpers. Include tickets, facility zones, staff accounts and roles, reporter-to-ticket associations, deadlines, and status audit events.
+Document DynamoDB tables, partition/sort keys, indexes, and access patterns before implementing data helpers. Include tickets with reporter-entered free-text `location`, staff accounts and roles, reporter-to-ticket associations, deadlines, and status audit events. No zone ID or zone catalog is planned.
 
 Define how merged tickets retain reporter associations, how reopening affects deadlines, and how managers query historical data.
+
+The manager history view must include current and previous ticket records, including reopened and merged tickets. Preserve completion and reopen events, proof-photo references, and original source reports so earlier repair cycles remain available after a ticket reopens or merges. Design the ticket and event access patterns for paginated history and aggregate counts; the exact table keys and indexes are still open.
 
 ## Staff account record — draft for team review
 
