@@ -1,8 +1,8 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "CommonJS",
+    "ignoreDeprecations": "6.0",
     "lib": ["ES2022"],
     "types": ["node"],
     "rootDir": "src",

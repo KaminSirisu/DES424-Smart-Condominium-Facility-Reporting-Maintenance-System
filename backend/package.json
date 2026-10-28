@@ -7,5 +7,14 @@
     "dev": "node --env-file-if-exists=../../.env --import tsx src/local.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1156.0",
+    "@aws-sdk/client-s3": "^3.1158.0",
+    "@aws-sdk/lib-dynamodb": "^3.1157.0"
   }
 }
