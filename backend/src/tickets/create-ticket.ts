@@ -5,15 +5,27 @@ import type {
 } from 'aws-lambda';
 import { extractBearerToken, verifyLineToken } from '../shared/line-token';
 import { createTicket, getTicket } from '../shared/ticket-repository';
-import { UPLOAD_ID_PATTERN, uploadExists } from '../shared/upload-store';
-import { ApiError, CreateTicketInput, TicketRecord } from './types';
+import {
+  UPLOAD_ID_PATTERN,
+  uploadExists,
+  uploadObjectKey,
+} from '../shared/upload-store';
+import {
+  ApiError,
+  CreateTicketInput,
+  StoredTicketPhoto,
+  TicketPhoto,
+  TicketRecord,
+} from './types';
 
 /**
  * POST /tickets — submit a facility defect report (SCFRMS-40).
  *
  * Contract: docs/api-specs/openapi.yaml (createTicket). The ticket is stored
  * as RECEIVED with no category/priority/teamId/deadlineAt; AI triage
- * (SCFRMS-41) fills those in afterwards.
+ * (SCFRMS-41) fills those in afterwards. The ticket, its reporter
+ * association and a TICKET_CREATED audit event are written atomically
+ * (see shared/ticket-repository.ts).
  *
  * Idempotency: the ticket id is derived from (lineUserId, Idempotency-Key),
  * so a retry targets the same item and the repository's conditional write
@@ -26,13 +38,13 @@ const IDEMPOTENCY_KEY_MAX = 128;
 const DESCRIPTION_MAX = 2000;
 const ALLOWED_FIELDS = ['location', 'description', 'defectPhotoUploadId'];
 
+// `photos` is added separately in toTicketView so S3 keys never leak.
 const VIEW_FIELDS = [
   'id',
   'location',
   'description',
   'status',
   'repairCycle',
-  'photos',
   'category',
   'suggestedPriority',
   'priority',
@@ -46,17 +58,30 @@ const VIEW_FIELDS = [
   'updatedAt',
 ] as const satisfies readonly (keyof TicketRecord)[];
 
+/** Caller-visible photo metadata only — never the private S3 key. */
+function toPhotoView(photo: StoredTicketPhoto): TicketPhoto {
+  const view: TicketPhoto = {
+    id: photo.id,
+    purpose: photo.purpose,
+    addedAt: photo.addedAt,
+  };
+  if (photo.repairCycle !== undefined) view.repairCycle = photo.repairCycle;
+  return view;
+}
+
 /**
  * Caller-safe view of a ticket. An allowlist, not a denylist: records read
- * back from DynamoDB also carry key attributes (PK, GSI2PK = REPORTER#<LINE
- * ID>, ...) that must never reach the caller.
+ * back from DynamoDB also carry key attributes (PK, SK, ...) and internal
+ * fields (version, photo S3 keys, reporterLineUserId) that must never reach
+ * the caller.
  */
-export function toTicketView(record: TicketRecord): Partial<TicketRecord> {
-  const view: Partial<Record<string, unknown>> = {};
+export function toTicketView(record: TicketRecord): Record<string, unknown> {
+  const view: Record<string, unknown> = {};
   for (const field of VIEW_FIELDS) {
     if (record[field] !== undefined) view[field] = record[field];
   }
-  return view as Partial<TicketRecord>;
+  view.photos = record.photos.map(toPhotoView);
+  return view;
 }
 
 export function deriveTicketId(
@@ -146,8 +171,19 @@ function isSamePayload(existing: TicketRecord, input: CreateTicketInput) {
   );
 }
 
+/**
+ * The create is a DynamoDB transaction, so a duplicate ticket id surfaces as
+ * TransactionCanceledException; item 0 is the ticket (the conditional Put).
+ */
 function isConditionalCheckFailure(err: unknown): boolean {
-  return (err as { name?: string })?.name === 'ConditionalCheckFailedException';
+  const e = err as {
+    name?: string;
+    CancellationReasons?: { Code?: string }[];
+  };
+  return (
+    e?.name === 'TransactionCanceledException' &&
+    e.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed'
+  );
 }
 
 function json(
@@ -241,8 +277,18 @@ export async function handler(
       status: 'RECEIVED',
       repairCycle: 1,
       photos: [
-        { id: input.defectPhotoUploadId, purpose: 'DEFECT', addedAt: now },
+        {
+          id: input.defectPhotoUploadId,
+          purpose: 'DEFECT',
+          addedAt: now,
+          s3ObjectKey: uploadObjectKey(
+            'DEFECT',
+            lineUserId,
+            input.defectPhotoUploadId,
+          ),
+        },
       ],
+      version: 1,
       reporterLineUserId: lineUserId,
       createdAt: now,
       updatedAt: now,

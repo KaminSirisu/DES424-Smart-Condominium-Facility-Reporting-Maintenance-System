@@ -26,6 +26,11 @@ export interface TicketPhoto {
   repairCycle?: number;
 }
 
+/** A photo as stored: TicketPhoto plus its private S3 key, which must never reach a caller. */
+export interface StoredTicketPhoto extends TicketPhoto {
+  s3ObjectKey: string;
+}
+
 /**
  * The Ticket entity's domain shape, as stored in DynamoDB.
  *
@@ -48,7 +53,9 @@ export interface TicketRecord {
   status: TicketStatus;
   /** Starts at 1; increments each time a completed ticket is reopened. */
   repairCycle: number;
-  photos: TicketPhoto[];
+  photos: StoredTicketPhoto[];
+  /** Optimistic-locking counter: starts at 1, incremented on every update. */
+  version: number;
 
   /** Never exposed to callers — see toTicketView(). */
   reporterLineUserId: string;
@@ -88,4 +95,15 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+/** A stored audit event (subset of the TicketEvent schema in openapi.yaml). */
+export interface TicketEventRecord {
+  id: string;
+  ticketId: string;
+  kind: string;
+  occurredAt: string;
+  actorType: 'REPORTER' | 'STAFF' | 'SYSTEM';
+  toStatus?: TicketStatus;
+  repairCycle?: number;
 }

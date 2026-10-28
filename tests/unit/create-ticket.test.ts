@@ -65,8 +65,14 @@ function storedRecord(overrides: Partial<TicketRecord> = {}): TicketRecord {
     status: 'RECEIVED',
     repairCycle: 1,
     photos: [
-      { id: 'upl_123', purpose: 'DEFECT', addedAt: '2026-10-28T00:00:00.000Z' },
+      {
+        id: 'upl_123',
+        purpose: 'DEFECT',
+        addedAt: '2026-10-28T00:00:00.000Z',
+        s3ObjectKey: 'uploads/DEFECT/Uabc123/upl_123',
+      },
     ],
+    version: 1,
     reporterLineUserId: LINE_USER,
     createdAt: '2026-10-28T00:00:00.000Z',
     updatedAt: '2026-10-28T00:00:00.000Z',
@@ -106,11 +112,16 @@ describe('POST /tickets (createTicket handler)', () => {
     ]) {
       expect(ticket).not.toHaveProperty(absent);
     }
+    expect(ticket).not.toHaveProperty('version');
     expect(response.body).not.toContain(LINE_USER);
+    expect(response.body).not.toContain('s3ObjectKey');
+    expect(response.body).not.toContain('uploads/');
 
     const saved = vi.mocked(createTicket).mock.calls[0][0];
     expect(saved.reporterLineUserId).toBe(LINE_USER);
     expect(saved.status).toBe('RECEIVED');
+    expect(saved.version).toBe(1);
+    expect(saved.photos[0].s3ObjectKey).toBe('uploads/DEFECT/Uabc123/upl_123');
     expect(uploadExists).toHaveBeenCalledWith('DEFECT', LINE_USER, 'upl_123');
   });
 
@@ -201,6 +212,8 @@ describe('POST /tickets (createTicket handler)', () => {
 
     expect(response.statusCode).toBe(201);
     expect(response.body).not.toContain(LINE_USER);
+    expect(response.body).not.toContain('s3ObjectKey');
+    expect(response.body).not.toContain('uploads/');
     expect(JSON.parse(response.body ?? '')).not.toHaveProperty('PK');
   });
 
@@ -218,12 +231,33 @@ describe('POST /tickets (createTicket handler)', () => {
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(storedRecord());
     vi.mocked(createTicket).mockRejectedValue(
-      Object.assign(new Error('exists'), {
-        name: 'ConditionalCheckFailedException',
+      Object.assign(new Error('Transaction cancelled'), {
+        name: 'TransactionCanceledException',
+        CancellationReasons: [
+          { Code: 'ConditionalCheckFailed' },
+          { Code: 'None' },
+          { Code: 'None' },
+        ],
       }),
     );
     const response = await handler(makeEvent());
     expect(response.statusCode).toBe(201);
+  });
+
+  it('returns 500 when the transaction is cancelled for another reason', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(createTicket).mockRejectedValue(
+      Object.assign(new Error('Transaction cancelled'), {
+        name: 'TransactionCanceledException',
+        CancellationReasons: [
+          { Code: 'None' },
+          { Code: 'ProvisionedThroughputExceeded' },
+          { Code: 'None' },
+        ],
+      }),
+    );
+    const response = await handler(makeEvent());
+    expect(response.statusCode).toBe(500);
   });
 
   it('derives different ticket ids for different reporters with the same key', () => {
