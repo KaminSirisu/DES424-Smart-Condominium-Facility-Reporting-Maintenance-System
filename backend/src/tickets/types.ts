@@ -104,6 +104,9 @@ export interface TicketEventRecord {
   kind: string;
   occurredAt: string;
   actorType: 'REPORTER' | 'STAFF' | 'SYSTEM';
+  fromStatus?: TicketStatus;
   toStatus?: TicketStatus;
+  toPriority?: Priority;
+  toTeamId?: string;
   repairCycle?: number;
 }

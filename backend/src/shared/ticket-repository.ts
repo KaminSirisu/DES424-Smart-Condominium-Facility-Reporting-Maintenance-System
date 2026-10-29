@@ -1,6 +1,6 @@
 import { GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb } from './dynamodb-client';
-import { TicketEventRecord, TicketRecord } from '../tickets/types';
+import { Priority, TicketEventRecord, TicketRecord } from '../tickets/types';
 
 /**
  * DynamoDB access for the Ticket entity (single-table). Everything about one
@@ -14,9 +14,9 @@ import { TicketEventRecord, TicketRecord } from '../tickets/types';
  *   PK `TICKET#<id>` / SK `EVENT#<occurredAt>#<kind>`   audit event,
  *       time-ordered for paginated history.
  *
- * GSI1 (team queue) and GSI3 (status/deadline) are populated later, once a
- * ticket has a teamId and deadline. Keys are documented in
- * docs/database/README.md.
+ * GSI1 (team queue: `TEAM#<teamId>` / `DEADLINE#<deadlineAt>`) is set by
+ * applyTriage once a ticket is assigned; GSI3 (status) is still to come.
+ * Keys are documented in docs/database/README.md.
  */
 
 type TicketItem = TicketRecord & {
@@ -120,6 +120,89 @@ export async function createTicket(record: TicketRecord): Promise<void> {
         },
         { Put: { TableName, Item: toReporterItem(record) } },
         { Put: { TableName, Item: toCreatedEventItem(record) } },
+      ],
+    }),
+  );
+}
+
+export interface TriageUpdate {
+  category: string;
+  suggestedPriority: Priority;
+  priority: Priority;
+  teamId: string;
+  deadlineAt: string;
+  slaPolicyVersion: number;
+  /** Time of this update; also the audit event's occurredAt. */
+  now: string;
+}
+
+/**
+ * Applies a validated triage result: RECEIVED -> ASSIGNED, sets category,
+ * priority, team and deadline, bumps `version`, and adds the team-queue
+ * index keys (GSI1) — all in one transaction with a TRIAGED audit event.
+ *
+ * Only succeeds if the ticket is still RECEIVED at `expectedVersion`.
+ * Otherwise it fails with TransactionCanceledException (reason
+ * ConditionalCheckFailed), so a duplicate triage run changes nothing.
+ */
+export async function applyTriage(
+  ticketId: string,
+  expectedVersion: number,
+  update: TriageUpdate,
+): Promise<void> {
+  const TableName = tableName();
+  const event: EventItem = {
+    PK: `TICKET#${ticketId}`,
+    SK: `EVENT#${update.now}#TRIAGED`,
+    entityType: 'TICKET_EVENT',
+    id: `${ticketId}_triaged`,
+    ticketId,
+    kind: 'TRIAGED',
+    occurredAt: update.now,
+    actorType: 'SYSTEM',
+    fromStatus: 'RECEIVED',
+    toStatus: 'ASSIGNED',
+    toPriority: update.priority,
+    toTeamId: update.teamId,
+  };
+
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName,
+            Key: ticketKey(ticketId),
+            ConditionExpression: '#status = :received AND #version = :version',
+            UpdateExpression:
+              'SET #status = :assigned, category = :category, ' +
+              'suggestedPriority = :suggested, priority = :priority, ' +
+              'teamId = :teamId, deadlineAt = :deadlineAt, ' +
+              'slaPolicyVersion = :policy, triagedAt = :now, ' +
+              'updatedAt = :now, #version = #version + :one, ' +
+              'GSI1PK = :gsi1pk, GSI1SK = :gsi1sk',
+            ExpressionAttributeNames: {
+              '#status': 'status',
+              '#version': 'version',
+            },
+            ExpressionAttributeValues: {
+              ':received': 'RECEIVED',
+              ':assigned': 'ASSIGNED',
+              ':version': expectedVersion,
+              ':one': 1,
+              ':category': update.category,
+              ':suggested': update.suggestedPriority,
+              ':priority': update.priority,
+              ':teamId': update.teamId,
+              ':deadlineAt': update.deadlineAt,
+              ':policy': update.slaPolicyVersion,
+              ':now': update.now,
+              ':gsi1pk': `TEAM#${update.teamId}`,
+              ':gsi1sk': `DEADLINE#${update.deadlineAt}`,
+            },
+          },
+        },
+        { Put: { TableName, Item: event } },
       ],
     }),
   );

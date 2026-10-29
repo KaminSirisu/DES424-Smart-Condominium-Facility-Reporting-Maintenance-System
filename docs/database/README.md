@@ -48,7 +48,7 @@ One DynamoDB table (`TABLE_NAME`). Everything about a ticket shares the partitio
 
 | Item          | PK            | SK                          | Other keys                                                       |
 | ------------- | ------------- | --------------------------- | ---------------------------------------------------------------- |
-| Ticket        | `TICKET#<id>` | `METADATA`                  | GSI1 / GSI3 added at triage (see below)                          |
+| Ticket        | `TICKET#<id>` | `METADATA`                  | GSI1 added at triage (see below); GSI3 still to come             |
 | Reporter link | `TICKET#<id>` | `REPORTER#<lineUserId>`     | `GSI2PK = REPORTER#<lineUserId>`, `GSI2SK = CREATED#<createdAt>` |
 | Audit event   | `TICKET#<id>` | `EVENT#<occurredAt>#<kind>` | none                                                             |
 
@@ -71,7 +71,60 @@ Each item also carries `entityType` (`TICKET`, `TICKET_REPORTER`, `TICKET_EVENT`
 
 **Not decided yet**
 
-- GSI1 (team queue) and GSI3 (status / deadline) are added by SCFRMS-41 once a ticket has a `teamId` and `deadlineAt`. SCFRMS-42 needs an index that finds open tickets by deadline.
+- GSI1 (team queue) is set by SCFRMS-41 at triage. GSI3 (status) is not built yet. SCFRMS-42 needs an index that finds open tickets by deadline.
 - Team records (email address, SLA hours per priority) are not defined; SCFRMS-41, 42 and 46 need them.
 - Manager history queries and aggregate counts remain open, as listed at the top of this document.
 - Stream consumers (triage, notifications) must react only to `INSERT` events whose `entityType` is `TICKET`; the reporter link and audit event items are written in the same transaction and appear in the stream too.
+
+## AI triage — implemented in SCFRMS-41 (proposal for team review)
+
+A new ticket is stored as `RECEIVED` with no category, priority or team. A worker then classifies it and moves it to `ASSIGNED`. Bedrock never writes to DynamoDB: it only proposes values, and backend code validates them and writes the result.
+
+**Flow**
+
+1. The DynamoDB Stream delivers the `INSERT` of the ticket item (`entityType = TICKET`). The reporter link and audit event items also appear in the stream and are ignored, as are `MODIFY` events, so the triage update does not trigger itself.
+2. The worker skips the ticket unless it is still `RECEIVED`, so duplicate stream deliveries cost nothing.
+3. Rekognition (`DetectLabels`) reads the defect photo from S3 and returns object labels. If this fails, classification continues from the text alone.
+4. Bedrock (Converse API) receives the location, description and labels and replies with `{category, impact, urgency}`. The resident's text is passed as quoted data, never as instructions.
+5. Backend code accepts only known values, then computes the rest (below) and writes it in one transaction.
+
+**Rules applied in code** (`backend/src/triage/policy.ts`; proposed defaults from the Security, Roles & SLA requirements, to be confirmed by the juristic office)
+
+| Impact \ Urgency | HIGH     | MEDIUM   | LOW    |
+| ---------------- | -------- | -------- | ------ |
+| HIGH             | CRITICAL | CRITICAL | MEDIUM |
+| MEDIUM           | CRITICAL | MEDIUM   | LOW    |
+| LOW              | MEDIUM   | LOW      | LOW    |
+
+| Priority | Hours from `createdAt` to `DONE` |
+| -------- | -------------------------------- |
+| CRITICAL | 4                                |
+| MEDIUM   | 24                               |
+| LOW      | 120                              |
+
+The deadline is counted from ticket creation, so slow triage uses up SLA time. The requirements document calls the top priority `HIGH`; `openapi.yaml` calls it `CRITICAL`, and the team chose `CRITICAL`. Each category maps to the team of the same name: `ELECTRICAL`, `PLUMBING`, `HVAC`, `CLEANING_SANITATION`, `BUILDING_EQUIPMENT`.
+
+**Fields set on the ticket.** `status = ASSIGNED`, `category`, `suggestedPriority`, `priority`, `teamId`, `deadlineAt`, `slaPolicyVersion`, `triagedAt`, `updatedAt`, `version + 1`, and the team-queue keys `GSI1PK = TEAM#<teamId>`, `GSI1SK = DEADLINE#<deadlineAt>`. `suggestedPriority` and `priority` are equal at triage; a later manual change (`/priority`) alters only `priority`.
+
+**Audit event.** `SK = EVENT#<now>#TRIAGED`, `actorType = SYSTEM`, `fromStatus = RECEIVED`, `toStatus = ASSIGNED`, `toPriority`, `toTeamId`. The update and the event are one transaction, conditional on `status = RECEIVED` and the `version` that was read, so a concurrent change makes the whole write fail and nothing is applied twice.
+
+**Failures**
+
+| Case                                                     | Result                                                                         |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Reply is not JSON, or a value is outside the known lists | Ticket stays `RECEIVED`, logged, not retried. Find it with `?status=RECEIVED`. |
+| Ticket not found                                         | Logged, not retried.                                                           |
+| Temporary error (Bedrock throttling, DynamoDB)           | Reported as a batch item failure; Lambda retries from that record.             |
+| Photo labelling fails                                    | Classification continues from the text alone.                                  |
+
+**Configuration**
+
+- Environment: `BEDROCK_MODEL_ID` (required, no default), `AWS_REGION`, `TABLE_NAME`, `UPLOAD_BUCKET_NAME`.
+- IAM for the worker: `bedrock:InvokeModel`, `rekognition:DetectLabels`, read on S3 `uploads/*`, read and write on the table.
+- Stream and event source mapping: stream view `NEW_IMAGE` or `NEW_AND_OLD_IMAGES`, `ReportBatchItemFailures` enabled, a bounded retry count, and a small batch size (1-5) because each ticket makes sequential AI calls.
+
+**Not decided yet**
+
+- Bedrock model ID and region. The worker has not been run against a real model; the impact and urgency wording in the prompt is a first draft to test and tune.
+- How a manager finds and re-triages tickets the AI could not classify. For now they are `RECEIVED` tickets in `GET /tickets`; there is no re-run job and no separate queue.
+- Per-team SLA hours (the code supports overrides; none are set) and whether reopening a ticket resets its deadline.
