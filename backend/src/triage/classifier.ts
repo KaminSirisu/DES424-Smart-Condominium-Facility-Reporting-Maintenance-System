@@ -6,8 +6,8 @@ import {
   DetectLabelsCommand,
   RekognitionClient,
 } from '@aws-sdk/client-rekognition';
-import type { TicketRecord } from '../tickets/types';
-import { CATEGORIES } from './policy';
+import type { TicketRecord } from '../tickets/types.js';
+import { CATEGORIES } from './policy.js';
 
 /**
  * Asks AWS AI services to classify a ticket (SCFRMS-41).

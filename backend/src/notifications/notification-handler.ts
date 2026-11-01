@@ -3,10 +3,10 @@ import type {
   DynamoDBRecord,
   DynamoDBStreamEvent,
 } from 'aws-lambda';
-import { getTicket } from '../shared/ticket-repository';
-import type { TicketRecord } from '../tickets/types';
-import { hasSent, markSent } from './notification-log';
-import { sendWorkOrderEmail } from './work-order-email';
+import { getTicket } from '../shared/ticket-repository.js';
+import type { TicketRecord } from '../tickets/types.js';
+import { hasSent, markSent } from './notification-log.js';
+import { sendWorkOrderEmail } from './work-order-email.js';
 
 /**
  * Notification worker (SCFRMS-46, later SCFRMS-45), triggered by the table's

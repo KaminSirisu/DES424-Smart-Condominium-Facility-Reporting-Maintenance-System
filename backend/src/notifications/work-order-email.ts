@@ -1,6 +1,6 @@
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
-import type { TicketRecord } from '../tickets/types';
-import { isTeamId } from '../triage/policy';
+import type { TicketRecord } from '../tickets/types.js';
+import { isTeamId } from '../triage/policy.js';
 
 /**
  * Work order email to the assigned maintenance team (SCFRMS-46).

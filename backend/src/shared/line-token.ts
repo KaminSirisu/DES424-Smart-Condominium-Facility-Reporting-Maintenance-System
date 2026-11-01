@@ -1,4 +1,4 @@
-import { ApiError } from '../tickets/types';
+import { ApiError } from '../tickets/types.js';
 
 /**
  * Verifies a LINE ID token server-side and returns the verified reporter

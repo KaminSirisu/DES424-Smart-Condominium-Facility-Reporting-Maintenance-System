@@ -3,20 +3,20 @@ import type {
   APIGatewayProxyEventV2,
   APIGatewayProxyStructuredResultV2,
 } from 'aws-lambda';
-import { extractBearerToken, verifyLineToken } from '../shared/line-token';
-import { createTicket, getTicket } from '../shared/ticket-repository';
+import { extractBearerToken, verifyLineToken } from '../shared/line-token.js';
+import { createTicket, getTicket } from '../shared/ticket-repository.js';
 import {
   UPLOAD_ID_PATTERN,
   uploadExists,
   uploadObjectKey,
-} from '../shared/upload-store';
+} from '../shared/upload-store.js';
 import {
   ApiError,
   CreateTicketInput,
   StoredTicketPhoto,
   TicketPhoto,
   TicketRecord,
-} from './types';
+} from './types.js';
 
 /**
  * POST /tickets — submit a facility defect report (SCFRMS-40).

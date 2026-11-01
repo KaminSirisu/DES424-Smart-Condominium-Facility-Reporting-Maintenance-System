@@ -1,4 +1,4 @@
-import { Priority } from '../tickets/types';
+import { Priority } from '../tickets/types.js';
 
 /**
  * Triage policy for SCFRMS-41: which teams exist, how impact × urgency maps

@@ -1,6 +1,6 @@
 import { GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb } from './dynamodb-client';
-import { Priority, TicketEventRecord, TicketRecord } from '../tickets/types';
+import { ddb } from './dynamodb-client.js';
+import { Priority, TicketEventRecord, TicketRecord } from '../tickets/types.js';
 
 /**
  * DynamoDB access for the Ticket entity (single-table). Everything about one

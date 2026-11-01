@@ -3,10 +3,10 @@ import type {
   DynamoDBRecord,
   DynamoDBStreamEvent,
 } from 'aws-lambda';
-import { getTicket } from '../shared/ticket-repository';
-import { TriageError, applyClassification } from './apply-classification';
-import type { TriageOutcome } from './apply-classification';
-import { ClassifierError, classifyTicket } from './classifier';
+import { getTicket } from '../shared/ticket-repository.js';
+import { TriageError, applyClassification } from './apply-classification.js';
+import type { TriageOutcome } from './apply-classification.js';
+import { ClassifierError, classifyTicket } from './classifier.js';
 
 /**
  * AI triage worker (SCFRMS-41), triggered by the table's DynamoDB Stream.

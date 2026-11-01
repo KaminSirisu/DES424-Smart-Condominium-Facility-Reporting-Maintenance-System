@@ -1,5 +1,5 @@
 import { HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { PhotoPurpose } from '../tickets/types';
+import { PhotoPurpose } from '../tickets/types.js';
 
 /**
  * S3 access for uploaded images. The upload key encodes purpose and owner:

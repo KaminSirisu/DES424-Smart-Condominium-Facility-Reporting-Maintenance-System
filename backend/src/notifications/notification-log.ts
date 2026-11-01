@@ -1,5 +1,5 @@
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb } from '../shared/dynamodb-client';
+import { ddb } from '../shared/dynamodb-client.js';
 
 /**
  * Record of notifications already sent (SCFRMS-45/46), so a stream event

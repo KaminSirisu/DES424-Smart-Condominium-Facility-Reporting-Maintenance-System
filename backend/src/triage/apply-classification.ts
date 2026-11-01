@@ -1,4 +1,4 @@
-import { applyTriage, getTicket } from '../shared/ticket-repository';
+import { applyTriage, getTicket } from '../shared/ticket-repository.js';
 import {
   SLA_POLICY_VERSION,
   TEAM_FOR_CATEGORY,
@@ -6,7 +6,7 @@ import {
   isCategory,
   isLevel,
   priorityFor,
-} from './policy';
+} from './policy.js';
 
 /**
  * Turns an AI classification into a stored triage result (SCFRMS-41).
