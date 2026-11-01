@@ -109,6 +109,7 @@ describe('POST /tickets (createTicket handler)', () => {
       'priority',
       'teamId',
       'deadlineAt',
+      'safetyHazard',
     ]) {
       expect(ticket).not.toHaveProperty(absent);
     }
@@ -215,6 +216,18 @@ describe('POST /tickets (createTicket handler)', () => {
     expect(response.body).not.toContain('s3ObjectKey');
     expect(response.body).not.toContain('uploads/');
     expect(JSON.parse(response.body ?? '')).not.toHaveProperty('PK');
+  });
+
+  it('does not expose the internal safetyHazard field when replaying a stored ticket', async () => {
+    vi.mocked(getTicket).mockResolvedValue({
+      ...storedRecord(),
+      safetyHazard: 'GAS',
+    });
+    const response = await handler(makeEvent());
+
+    expect(response.statusCode).toBe(201);
+    expect(JSON.parse(response.body ?? '')).not.toHaveProperty('safetyHazard');
+    expect(response.body).not.toContain('GAS');
   });
 
   it('returns 409 when the key was used with a different payload', async () => {

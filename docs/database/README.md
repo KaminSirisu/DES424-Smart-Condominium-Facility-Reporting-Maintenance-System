@@ -57,7 +57,7 @@ Each item also carries `entityType` (`TICKET`, `TICKET_REPORTER`, `TICKET_EVENT`
 
 **Ticket id.** `tkt_` plus the first 26 hex characters of `sha256(lineUserId + "\n" + Idempotency-Key)`. A retry with the same key reaches the same item; two reporters using the same key never collide.
 
-**Ticket record fields.** The fields of the `Ticket` schema in `openapi.yaml`, plus internal-only `reporterLineUserId` (the original reporter), `version` (optimistic-locking counter, starts at 1) and, on each photo, `s3ObjectKey`. None of the internal fields, and no key attribute, is returned to callers.
+**Ticket record fields.** The fields of the `Ticket` schema in `openapi.yaml`, plus internal-only `reporterLineUserId` (the original reporter), `version` (optimistic-locking counter, starts at 1), `safetyHazard` (set at triage, see below) and, on each photo, `s3ObjectKey`. None of the internal fields, and no key attribute, is returned to callers.
 
 **Access patterns**
 
@@ -105,9 +105,11 @@ A new ticket is stored as `RECEIVED` with no category, priority or team. A worke
 
 The deadline is counted from ticket creation, so slow triage uses up SLA time. The requirements document calls the top priority `HIGH`; `openapi.yaml` calls it `CRITICAL`, and the team chose `CRITICAL`. Each category maps to the team of the same name: `ELECTRICAL`, `PLUMBING`, `HVAC`, `CLEANING_SANITATION`, `BUILDING_EQUIPMENT`.
 
-**Fields set on the ticket.** `status = ASSIGNED`, `category`, `suggestedPriority`, `priority`, `teamId`, `deadlineAt`, `slaPolicyVersion`, `triagedAt`, `updatedAt`, `version + 1`, and the team-queue keys `GSI1PK = TEAM#<teamId>`, `GSI1SK = DEADLINE#<deadlineAt>`. `suggestedPriority` and `priority` are equal at triage; a later manual change (`/priority`) alters only `priority`.
+**Safety override (SLA-02).** Before the matrix is applied, `backend/src/triage/safety.ts` scans the description for English keywords of a safety hazard: `FIRE`, `SMOKE`, `GAS`, `ELECTRIC_SHOCK`, `FLOOD_NEAR_ELECTRICAL` (water together with electrical equipment) or `TRAPPED`. If one matches, `priority` is `CRITICAL` whatever the matrix says, and the deadline is the CRITICAL one (4 hours from `createdAt`). `suggestedPriority` still holds the matrix result. The scan runs in code on the resident's text, not in the AI, so a crafted description cannot lower it. Phrases that name safety equipment (for example "fire extinguisher") or an air-conditioning gas refill do not trigger it.
 
-**Audit event.** `SK = EVENT#<now>#TRIAGED`, `actorType = SYSTEM`, `fromStatus = RECEIVED`, `toStatus = ASSIGNED`, `toPriority`, `toTeamId`. The update and the event are one transaction, conditional on `status = RECEIVED` and the `version` that was read, so a concurrent change makes the whole write fail and nothing is applied twice.
+**Fields set on the ticket.** `status = ASSIGNED`, `category`, `suggestedPriority`, `priority`, `teamId`, `deadlineAt`, `slaPolicyVersion`, `triagedAt`, `updatedAt`, `version + 1`, and the team-queue keys `GSI1PK = TEAM#<teamId>`, `GSI1SK = DEADLINE#<deadlineAt>`. When the safety override applied, `safetyHazard` is also set. It is internal: `openapi.yaml` has no such field, so it is never returned to callers. `suggestedPriority` and `priority` are equal at triage; a later manual change (`/priority`) alters only `priority`.
+
+**Audit event.** `SK = EVENT#<now>#TRIAGED`, `actorType = SYSTEM`, `fromStatus = RECEIVED`, `toStatus = ASSIGNED`, `toPriority`, `toTeamId`, and `note = SAFETY_OVERRIDE:<hazard>` when the override applied (`note` is part of the `TicketEvent` schema). The update and the event are one transaction, conditional on `status = RECEIVED` and the `version` that was read, so a concurrent change makes the whole write fail and nothing is applied twice.
 
 **Failures**
 
@@ -115,6 +117,7 @@ The deadline is counted from ticket creation, so slow triage uses up SLA time. T
 | -------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | Reply is not JSON, or a value is outside the known lists | Ticket stays `RECEIVED`, logged, not retried. Find it with `?status=RECEIVED`. |
 | Ticket not found                                         | Logged, not retried.                                                           |
+| Same as the first row, but a safety hazard was detected  | Same, and logged as `Safety hazard report needs manual triage`.                |
 | Temporary error (Bedrock throttling, DynamoDB)           | Reported as a batch item failure; Lambda retries from that record.             |
 | Photo labelling fails                                    | Classification continues from the text alone.                                  |
 
@@ -126,6 +129,9 @@ The deadline is counted from ticket creation, so slow triage uses up SLA time. T
 
 **Not decided yet**
 
+- Safety keywords are English only. Thai phrases are not detected yet, so a Thai report of fire or gas is triaged by the matrix alone.
+- A hazard report the AI could not classify stays `RECEIVED` and is only logged. The 5-minute fallback to the manager's queue as `MEDIUM` (SLA-06) needs the scheduler of SCFRMS-42, and no one is alerted yet.
+- The receipt that shows the building security phone number and the emergency numbers 191, 199 and 1669 (SLA-02) belongs to the LINE message of SCFRMS-45.
 - Bedrock model ID and region. The worker has not been run against a real model; the impact and urgency wording in the prompt is a first draft to test and tune.
 - How a manager finds and re-triages tickets the AI could not classify. For now they are `RECEIVED` tickets in `GET /tickets`; there is no re-run job and no separate queue.
 - Per-team SLA hours (the code supports overrides; none are set) and whether reopening a ticket resets its deadline.

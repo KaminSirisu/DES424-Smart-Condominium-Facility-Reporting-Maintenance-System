@@ -146,6 +146,74 @@ describe('applyClassification', () => {
     );
   });
 
+  describe('safety override (SLA-02)', () => {
+    const hazardTicket = () =>
+      ticket({ description: 'I can smell gas in the corridor.' });
+
+    it('makes the ticket CRITICAL whatever the matrix says', async () => {
+      vi.mocked(getTicket).mockResolvedValue(hazardTicket());
+
+      await applyClassification(
+        'tkt_1',
+        { category: 'BUILDING_EQUIPMENT', impact: 'LOW', urgency: 'LOW' },
+        NOW,
+      );
+
+      expect(applyTriage).toHaveBeenCalledWith(
+        'tkt_1',
+        1,
+        expect.objectContaining({
+          suggestedPriority: 'LOW',
+          priority: 'CRITICAL',
+          safetyHazard: 'GAS',
+          // 4h CRITICAL deadline from created_at, not the 120h LOW one
+          deadlineAt: '2026-10-28T14:00:00.000Z',
+        }),
+      );
+    });
+
+    it('records the hazard even when the matrix already says CRITICAL', async () => {
+      vi.mocked(getTicket).mockResolvedValue(hazardTicket());
+      await applyClassification('tkt_1', good, NOW);
+      expect(vi.mocked(applyTriage).mock.calls[0][2]).toMatchObject({
+        priority: 'CRITICAL',
+        safetyHazard: 'GAS',
+      });
+    });
+
+    it('leaves out safetyHazard for an ordinary report', async () => {
+      await applyClassification('tkt_1', good, NOW);
+      expect(vi.mocked(applyTriage).mock.calls[0][2]).not.toHaveProperty(
+        'safetyHazard',
+      );
+    });
+
+    it('logs a hazard report the AI could not classify', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.mocked(getTicket).mockResolvedValue(hazardTicket());
+
+      await expect(
+        applyClassification('tkt_1', { category: 'ROOFING' }, NOW),
+      ).rejects.toMatchObject({ code: 'INVALID_CLASSIFICATION' });
+
+      expect(error).toHaveBeenCalledWith(
+        'Safety hazard report needs manual triage',
+        { ticketId: 'tkt_1', hazard: 'GAS' },
+      );
+      expect(applyTriage).not.toHaveBeenCalled();
+      error.mockRestore();
+    });
+
+    it('does not log anything for an ordinary unusable reply', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await expect(
+        applyClassification('tkt_1', { category: 'ROOFING' }, NOW),
+      ).rejects.toBeInstanceOf(TriageError);
+      expect(error).not.toHaveBeenCalled();
+      error.mockRestore();
+    });
+  });
+
   it('exposes TriageError as an Error subclass', () => {
     const err = new TriageError('TICKET_NOT_FOUND', 'x');
     expect(err).toBeInstanceOf(Error);

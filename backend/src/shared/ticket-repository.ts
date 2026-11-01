@@ -132,6 +132,8 @@ export interface TriageUpdate {
   teamId: string;
   deadlineAt: string;
   slaPolicyVersion: number;
+  /** Set when the safety override (SLA-02) decided the priority. */
+  safetyHazard?: string;
   /** Time of this update; also the audit event's occurredAt. */
   now: string;
 }
@@ -164,6 +166,9 @@ export async function applyTriage(
     toStatus: 'ASSIGNED',
     toPriority: update.priority,
     toTeamId: update.teamId,
+    ...(update.safetyHazard
+      ? { note: `SAFETY_OVERRIDE:${update.safetyHazard}` }
+      : {}),
   };
 
   await ddb.send(
@@ -180,7 +185,8 @@ export async function applyTriage(
               'teamId = :teamId, deadlineAt = :deadlineAt, ' +
               'slaPolicyVersion = :policy, triagedAt = :now, ' +
               'updatedAt = :now, #version = #version + :one, ' +
-              'GSI1PK = :gsi1pk, GSI1SK = :gsi1sk',
+              'GSI1PK = :gsi1pk, GSI1SK = :gsi1sk' +
+              (update.safetyHazard ? ', safetyHazard = :hazard' : ''),
             ExpressionAttributeNames: {
               '#status': 'status',
               '#version': 'version',
@@ -199,6 +205,9 @@ export async function applyTriage(
               ':now': update.now,
               ':gsi1pk': `TEAM#${update.teamId}`,
               ':gsi1sk': `DEADLINE#${update.deadlineAt}`,
+              ...(update.safetyHazard
+                ? { ':hazard': update.safetyHazard }
+                : {}),
             },
           },
         },

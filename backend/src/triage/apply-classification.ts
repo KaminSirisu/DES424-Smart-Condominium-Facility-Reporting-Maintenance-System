@@ -1,4 +1,5 @@
 import { applyTriage, getTicket } from '../shared/ticket-repository.js';
+import type { Priority } from '../tickets/types.js';
 import {
   SLA_POLICY_VERSION,
   TEAM_FOR_CATEGORY,
@@ -7,6 +8,7 @@ import {
   isLevel,
   priorityFor,
 } from './policy.js';
+import { detectSafetyHazard } from './safety.js';
 
 /**
  * Turns an AI classification into a stored triage result (SCFRMS-41).
@@ -15,7 +17,8 @@ import {
  * is decided here in code: values outside the known enums are rejected,
  * priority comes from the impact × urgency matrix, the team from the
  * category, and the deadline from the SLA policy. Nothing the model says is
- * written to the database as-is.
+ * written to the database as-is. A safety hazard in the description (SLA-02)
+ * makes the ticket CRITICAL whatever the matrix says.
  *
  * Failure policy (pending team confirmation): an unusable classification
  * leaves the ticket RECEIVED, so it stays visible to a manager through
@@ -60,28 +63,39 @@ export async function applyClassification(
   // Streams and retries can deliver the same ticket twice; do nothing.
   if (ticket.status !== 'RECEIVED') return 'ALREADY_TRIAGED';
 
+  const hazard = detectSafetyHazard(ticket.description);
+
   const { category, impact, urgency } = (classification ?? {}) as Record<
     string,
     unknown
   >;
   if (!isCategory(category) || !isLevel(impact) || !isLevel(urgency)) {
+    if (hazard) {
+      // Nobody is alerted yet, so make sure this is easy to find in the logs.
+      console.error('Safety hazard report needs manual triage', {
+        ticketId,
+        hazard,
+      });
+    }
     throw new TriageError(
       'INVALID_CLASSIFICATION',
       'Classification must contain a known category, impact and urgency.',
     );
   }
 
-  const priority = priorityFor(impact, urgency);
+  const suggestedPriority = priorityFor(impact, urgency);
+  const priority: Priority = hazard ? 'CRITICAL' : suggestedPriority;
   const teamId = TEAM_FOR_CATEGORY[category];
 
   try {
     await applyTriage(ticketId, ticket.version, {
       category,
-      suggestedPriority: priority,
+      suggestedPriority,
       priority,
       teamId,
       deadlineAt: computeDeadline(ticket.createdAt, teamId, priority),
       slaPolicyVersion: SLA_POLICY_VERSION,
+      ...(hazard ? { safetyHazard: hazard } : {}),
       now: now.toISOString(),
     });
   } catch (err) {

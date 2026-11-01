@@ -64,6 +64,8 @@ export interface TicketRecord {
   suggestedPriority?: Priority;
   priority?: Priority;
   teamId?: string;
+  /** Set when the safety override (SLA-02) raised the priority to CRITICAL. */
+  safetyHazard?: string;
   acceptedByStaffId?: string;
   acceptedAt?: string;
   deadlineAt?: string;
@@ -108,5 +110,7 @@ export interface TicketEventRecord {
   toStatus?: TicketStatus;
   toPriority?: Priority;
   toTeamId?: string;
+  /** Why the change was made, when it was not an ordinary one (openapi TicketEvent.note). */
+  note?: string;
   repairCycle?: number;
 }
