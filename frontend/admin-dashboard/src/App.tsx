@@ -7,6 +7,10 @@ import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
 import NotFoundPage from './pages/NotFoundPage';
 import ErrorPage from './pages/ErrorPage';
+import TechLayout from './layouts/TechLayout';
+import JobsPage from './pages/tech/JobsPage';
+import JobDetailPage from './pages/tech/JobDetailPage';
+import TechNotFoundPage from './pages/tech/TechNotFoundPage';
 
 const router = createBrowserRouter([
   {
@@ -20,6 +24,16 @@ const router = createBrowserRouter([
       { path: 'history', element: <HistoryPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: '*', element: <NotFoundPage /> },
+    ],
+  },
+  {
+    path: '/tech',
+    element: <TechLayout />,
+    errorElement: <ErrorPage />,
+    children: [
+      { index: true, element: <JobsPage /> },
+      { path: 'jobs/:ticketId', element: <JobDetailPage /> },
+      { path: '*', element: <TechNotFoundPage /> },
     ],
   },
 ]);
