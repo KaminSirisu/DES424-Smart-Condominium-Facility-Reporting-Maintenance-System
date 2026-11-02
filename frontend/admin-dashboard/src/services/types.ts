@@ -17,4 +17,9 @@ export type Ticket = {
   location: string;
   status: TicketStatus;
   priority?: Priority;
+  category?: string;
+  teamId?: string;
+  acceptedByStaffId?: string;
+  deadlineAt?: string;
+  createdAt: string;
 };
