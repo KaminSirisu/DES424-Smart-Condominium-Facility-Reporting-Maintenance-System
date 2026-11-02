@@ -2,6 +2,14 @@ export type TicketStatus =
   'RECEIVED' | 'ASSIGNED' | 'IN_PROGRESS' | 'DONE' | 'MERGED';
 export type Priority = 'CRITICAL' | 'MEDIUM' | 'LOW';
 export type StaffRole = 'TECHNICIAN' | 'MANAGER';
+export type PhotoPurpose = 'DEFECT' | 'REPAIR_PROOF';
+
+export type TicketPhoto = {
+  id: string;
+  purpose: PhotoPurpose;
+  addedAt: string;
+  repairCycle?: number;
+};
 
 export type StaffProfile = {
   id: string;
@@ -16,10 +24,17 @@ export type Ticket = {
   description: string;
   location: string;
   status: TicketStatus;
-  priority?: Priority;
+  repairCycle: number;
+  photos: TicketPhoto[];
   category?: string;
+  suggestedPriority?: Priority;
+  priority?: Priority;
   teamId?: string;
   acceptedByStaffId?: string;
+  acceptedAt?: string;
   deadlineAt?: string;
+  completedAt?: string;
+  mergedIntoTicketId?: string;
   createdAt: string;
+  updatedAt: string;
 };
