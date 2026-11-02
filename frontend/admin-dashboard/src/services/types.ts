@@ -27,14 +27,30 @@ export type Ticket = {
   repairCycle: number;
   photos: TicketPhoto[];
   category?: string;
-  suggestedPriority?: Priority;
   priority?: Priority;
+  prioritySetBy?: PrioritySetBy;
   teamId?: string;
-  acceptedByStaffId?: string;
-  acceptedAt?: string;
   deadlineAt?: string;
   completedAt?: string;
   mergedIntoTicketId?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type PrioritySetBy = 'AI' | 'STAFF';
+
+export type TicketEvent = {
+  id: string;
+  ticketId: string;
+  kind: string;
+  occurredAt: string;
+  actorType?: 'REPORTER' | 'STAFF' | 'SYSTEM';
+  actorStaffId?: string;
+  fromStatus?: TicketStatus;
+  toStatus?: TicketStatus;
+  fromPriority?: Priority;
+  toPriority?: Priority;
+  repairCycle?: number;
+  proofPhotoId?: string;
+  note?: string;
 };

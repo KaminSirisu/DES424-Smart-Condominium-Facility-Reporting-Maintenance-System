@@ -1,4 +1,4 @@
-import type { Ticket } from './types';
+import type { Ticket, TicketEvent } from './types';
 
 // Mock data until GET /tickets exists. IDs follow the backend format (tkt_ + hash).
 const hoursFromNow = (hours: number) =>
@@ -15,6 +15,7 @@ export const MOCK_TICKETS: Ticket[] = [
       { id: 'pho_treadmill', purpose: 'DEFECT', addedAt: hoursFromNow(-2) },
     ],
     priority: 'LOW',
+    prioritySetBy: 'AI',
     category: 'Gym machine',
     teamId: 'team-1',
     deadlineAt: hoursFromNow(7),
@@ -29,10 +30,9 @@ export const MOCK_TICKETS: Ticket[] = [
     repairCycle: 1,
     photos: [{ id: 'pho_lift', purpose: 'DEFECT', addedAt: hoursFromNow(-1) }],
     priority: 'MEDIUM',
+    prioritySetBy: 'STAFF',
     category: 'Passenger lift',
     teamId: 'team-1',
-    acceptedByStaffId: 'staff-1',
-    acceptedAt: hoursFromNow(-0.5),
     createdAt: hoursFromNow(-1),
     updatedAt: hoursFromNow(-0.5),
   },
@@ -52,8 +52,8 @@ export const MOCK_TICKETS: Ticket[] = [
       },
     ],
     priority: 'LOW',
+    prioritySetBy: 'STAFF',
     teamId: 'team-1',
-    acceptedByStaffId: 'staff-1',
     completedAt: hoursFromNow(-26),
     createdAt: hoursFromNow(-30),
     updatedAt: hoursFromNow(-26),
@@ -66,9 +66,48 @@ export const MOCK_TICKETS: Ticket[] = [
     repairCycle: 1,
     photos: [{ id: 'pho_pool', purpose: 'DEFECT', addedAt: hoursFromNow(-1) }],
     priority: 'CRITICAL',
+    prioritySetBy: 'AI',
     teamId: 'team-2',
     deadlineAt: hoursFromNow(2),
     createdAt: hoursFromNow(-1),
     updatedAt: hoursFromNow(-1),
   },
+  {
+    id: 'tkt_9b4d6f1a3c5e7b9d0f2a4c6e8b',
+    description: 'Gym air-con not cooling',
+    location: 'Bldg B · Gym · Floor 8',
+    status: 'ASSIGNED',
+    repairCycle: 1,
+    photos: [
+      { id: 'pho_aircon', purpose: 'DEFECT', addedAt: hoursFromNow(-3) },
+    ],
+    priority: 'LOW',
+    prioritySetBy: 'AI',
+    category: 'Air conditioning',
+    teamId: 'team-1',
+    deadlineAt: hoursFromNow(9),
+    createdAt: hoursFromNow(-3),
+    updatedAt: hoursFromNow(-3),
+  },
 ];
+
+export const MOCK_EVENTS: TicketEvent[] = MOCK_TICKETS.flatMap((ticket) => [
+  {
+    id: `evt_${ticket.id}_created`,
+    ticketId: ticket.id,
+    kind: 'CREATED',
+    occurredAt: ticket.createdAt,
+    actorType: 'REPORTER',
+    toStatus: 'RECEIVED',
+  },
+  {
+    id: `evt_${ticket.id}_triaged`,
+    ticketId: ticket.id,
+    kind: 'TRIAGED',
+    occurredAt: ticket.createdAt,
+    actorType: 'SYSTEM',
+    fromStatus: 'RECEIVED',
+    toStatus: 'ASSIGNED',
+    toPriority: ticket.priority,
+  },
+]);

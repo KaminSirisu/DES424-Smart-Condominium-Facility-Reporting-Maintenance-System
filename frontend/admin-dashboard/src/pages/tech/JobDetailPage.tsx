@@ -1,13 +1,16 @@
 import { useEffect, useState, type ChangeEvent } from 'react';
-import { useParams } from 'react-router';
+import { Link, useParams } from 'react-router';
 import { Camera, CheckCircle2, MapPin, Play } from 'lucide-react';
+import DuplicateList from '../../components/DuplicateList';
+import HistoryTimeline from '../../components/HistoryTimeline';
+import PriorityReview from '../../components/PriorityReview';
 import TechHeader from '../../components/TechHeader';
 import { PriorityLabel, StatusBadge } from '../../components/TicketBadges';
+import { useAction } from '../../hooks/useAction';
 import { useCurrentStaff } from '../../services/session';
 import {
   markDone,
   startWork,
-  TicketActionError,
   uploadRepairProof,
   useTicket,
 } from '../../services/tickets';
@@ -17,10 +20,13 @@ type Proof = { uploadId: string; previewUrl: string };
 
 export default function JobDetailPage() {
   const { ticketId } = useParams();
+  return <JobDetail key={ticketId} ticketId={ticketId} />;
+}
+
+function JobDetail({ ticketId }: { ticketId: string | undefined }) {
   const ticket = useTicket(ticketId);
   const staff = useCurrentStaff();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const { busy, error, run } = useAction();
   const [proof, setProof] = useState<Proof>();
 
   // Free the browser memory used by the preview image when it is replaced or the page closes.
@@ -40,23 +46,8 @@ export default function JobDetailPage() {
     );
   }
 
-  const isMine = ticket.acceptedByStaffId === staff.id;
-
-  async function run(action: () => Promise<void>) {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await action();
-    } catch (e) {
-      setError(
-        e instanceof TicketActionError
-          ? e.message
-          : 'Something went wrong. Please try again.',
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
+  const isOpen =
+    ticket.status === 'ASSIGNED' || ticket.status === 'IN_PROGRESS';
 
   function handleProofSelected(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -71,11 +62,12 @@ export default function JobDetailPage() {
   return (
     <div>
       <TechHeader
-        title={`#${ticketId}`}
+        title={`#${ticket.id}`}
         subtitle={ticket.category}
         backTo="/tech"
       />
-      <div className="flex flex-col gap-4 p-3">
+
+      <div className="flex flex-col gap-5 p-3">
         <section>
           <h2 className="text-base font-semibold">{ticket.description}</h2>
           <p className="mt-1 flex items-center gap-1 text-xs text-gray-500">
@@ -119,13 +111,7 @@ export default function JobDetailPage() {
           </button>
         )}
 
-        {ticket.status === 'IN_PROGRESS' && !isMine && (
-          <p className="rounded-lg bg-gray-50 p-3 text-sm text-gray-600">
-            Another technician is working on this job.
-          </p>
-        )}
-
-        {ticket.status === 'IN_PROGRESS' && isMine && (
+        {ticket.status === 'IN_PROGRESS' && (
           <section className="flex flex-col gap-2">
             <h3 className="text-xs text-gray-500">
               Proof-of-repair photo (required)
@@ -175,6 +161,24 @@ export default function JobDetailPage() {
             .
           </p>
         )}
+
+        {ticket.status === 'MERGED' && ticket.mergedIntoTicketId && (
+          <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
+            Merged into{' '}
+            <Link
+              to={`/tech/jobs/${ticket.mergedIntoTicketId}`}
+              className="underline"
+            >
+              #{ticket.mergedIntoTicketId}
+            </Link>
+          </p>
+        )}
+
+        {isOpen && (
+          <PriorityReview key={ticket.id} ticket={ticket} staff={staff} />
+        )}
+        {isOpen && <DuplicateList ticket={ticket} staff={staff} />}
+        <HistoryTimeline ticketId={ticket.id} />
       </div>
     </div>
   );
