@@ -62,20 +62,20 @@ Business rules the UI follows (team decisions; see "Spec changes" below):
 
 All paths are under `/v1`. Every call sends `Authorization: Bearer <staff token>`. Errors use the spec's envelope `{ error: { code, message, requestId } }`; the UI shows `message` to the user. Status in the spec: **Spec** = already in `openapi.yaml`; **Change** = in the spec but needs the change described; **New** = proposed, not in the spec yet.
 
-| # | Endpoint | Used by | Status in spec |
-| - | -------- | ------- | -------------- |
-| 1 | `POST /auth/staff/login` | Login page (not built) | Change |
-| 2 | `GET /auth/staff/me` | `useCurrentStaff()` | Change |
-| 3 | `GET /tickets` | `useTeamTickets()` | Change |
-| 4 | `GET /tickets/{ticketId}` | `useTicket()` | Spec |
-| 5 | `GET /tickets/{ticketId}/photos/{photoId}/access` | Resident photo (placeholder) | Spec |
-| 6 | `PATCH /tickets/{ticketId}/status` (IN_PROGRESS) | `startWork()` | Change |
-| 7 | `POST /uploads` | `uploadRepairProof()` | Spec |
-| 8 | `PATCH /tickets/{ticketId}/status` (DONE) | `markDone()` | Spec |
-| 9 | `PATCH /tickets/{ticketId}/priority` | `setPriority()` | Change |
-| 10 | `GET /tickets/{ticketId}/duplicates` | `useDuplicateCandidates()` | New |
-| 11 | `POST /tickets/{ticketId}/merge` | `mergeTickets()` | Spec |
-| 12 | `GET /tickets/{ticketId}/events` | `useTicketEvents()` | Spec |
+| #   | Endpoint                                          | Used by                      | Status in spec |
+| --- | ------------------------------------------------- | ---------------------------- | -------------- |
+| 1   | `POST /auth/staff/login`                          | Login page (not built)       | Change         |
+| 2   | `GET /auth/staff/me`                              | `useCurrentStaff()`          | Change         |
+| 3   | `GET /tickets`                                    | `useTeamTickets()`           | Change         |
+| 4   | `GET /tickets/{ticketId}`                         | `useTicket()`                | Spec           |
+| 5   | `GET /tickets/{ticketId}/photos/{photoId}/access` | Resident photo (placeholder) | Spec           |
+| 6   | `PATCH /tickets/{ticketId}/status` (IN_PROGRESS)  | `startWork()`                | Change         |
+| 7   | `POST /uploads`                                   | `uploadRepairProof()`        | Spec           |
+| 8   | `PATCH /tickets/{ticketId}/status` (DONE)         | `markDone()`                 | Spec           |
+| 9   | `PATCH /tickets/{ticketId}/priority`              | `setPriority()`              | Change         |
+| 10  | `GET /tickets/{ticketId}/duplicates`              | `useDuplicateCandidates()`   | New            |
+| 11  | `POST /tickets/{ticketId}/merge`                  | `mergeTickets()`             | Spec           |
+| 12  | `GET /tickets/{ticketId}/events`                  | `useTicketEvents()`          | Spec           |
 
 **1. `POST /auth/staff/login`**: start a staff session.
 
