@@ -64,6 +64,12 @@ export interface TicketRecord {
   suggestedPriority?: Priority;
   priority?: Priority;
   teamId?: string;
+  /**
+   * Who decided `priority`: 'AI' for the automatic triage (including the
+   * safety override), 'STAFF' once a person changes it. Part of the Ticket
+   * schema in openapi.yaml.
+   */
+  prioritySetBy?: 'AI' | 'STAFF';
   /** Set when the safety override (SLA-02) raised the priority to CRITICAL. */
   safetyHazard?: string;
   acceptedByStaffId?: string;
@@ -93,6 +99,8 @@ export class ApiError extends Error {
     public readonly statusCode: number,
     public readonly code: string,
     message: string,
+    /** Extra response headers, such as Retry-After on a 429. */
+    public readonly headers: Record<string, string> = {},
   ) {
     super(message);
     this.name = 'ApiError';

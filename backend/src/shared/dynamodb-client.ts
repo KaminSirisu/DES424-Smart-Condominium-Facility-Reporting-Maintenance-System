@@ -5,12 +5,9 @@ import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
  * Shared DynamoDB client, module-scoped so Lambda reuses it across warm
  * invocations instead of reconnecting every call.
  *
- * Table design: single-table. One table (`TABLE_NAME`) holds every entity
- * (Ticket now; Account, Team, etc. as those modules are built), each
- * distinguished by a generic `PK`/`SK` key pair plus an `entityType`
- * attribute, with generic GSIs (`GSI1`..`GSI3`) reused across entity types
- * for their alternate access patterns. See docs/database/README.md for
- * the full key scheme.
+ * Table design: one table per entity, as proposed in SCFRMS-28 (see
+ * docs/database/dynamodb-access-patterns.md). Table names come from
+ * environment variables, listed in shared/tables.ts.
  */
 
 const client = new DynamoDBClient({

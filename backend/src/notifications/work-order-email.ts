@@ -1,15 +1,17 @@
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
+import { getTeamEmail } from '../shared/teams.js';
 import type { TicketRecord } from '../tickets/types.js';
 import { isTeamId } from '../triage/policy.js';
 
 /**
  * Work order email to the assigned maintenance team (SCFRMS-46).
  *
- * Sent after AI triage has assigned the ticket. The team's address comes from
- * the TEAM_EMAILS environment variable, a JSON object such as
- * {"PLUMBING": "plumbing@example.com"}, because teams have no record in the
- * database yet. The email is plain text and the subject holds only values the
- * system generated (ticket id, priority, team), never resident-written text.
+ * Sent after AI triage has assigned the ticket. The team's address is the
+ * `email` field of its record in the Teams table (shared/teams.ts). Until that
+ * table exists, the TEAM_EMAILS environment variable is the fallback: a JSON
+ * object such as {"PLUMBING": "plumbing@example.com"}. The email is plain text
+ * and the subject holds only values the system generated (ticket id,
+ * priority, team), never resident-written text.
  */
 
 export interface EmailMessage {
@@ -47,7 +49,7 @@ export const sesSender: EmailSender = {
 
 export type WorkOrderResult = 'SENT' | 'NO_RECIPIENT';
 
-/** The address configured for a team, or null if there is none. */
+/** The address configured for a team in TEAM_EMAILS, or null if there is none. */
 export function teamEmail(teamId: string): string | null {
   const raw = process.env.TEAM_EMAILS;
   if (!raw) return null;
@@ -124,12 +126,15 @@ function requiredEnv(name: string): string {
 }
 
 /**
- * Emails the ticket's team. A team with no configured address is reported as
- * NO_RECIPIENT rather than thrown, because retrying cannot fix it.
+ * Emails the ticket's team. A team with no address in the Teams table or in
+ * TEAM_EMAILS is reported as NO_RECIPIENT rather than thrown, because
+ * retrying cannot fix it. A failing Teams lookup is thrown so the caller
+ * retries.
  */
 export async function sendWorkOrderEmail(
   ticket: TicketRecord,
   sender: EmailSender = sesSender,
+  lookupEmail: (teamId: string) => Promise<string | null> = getTeamEmail,
 ): Promise<WorkOrderResult> {
   const { subject, text } = buildWorkOrderEmail(
     ticket,
@@ -140,7 +145,7 @@ export async function sendWorkOrderEmail(
     throw new Error(`Ticket ${ticket.id} has an unknown team.`);
   }
 
-  const to = teamEmail(teamId);
+  const to = (await lookupEmail(teamId)) ?? teamEmail(teamId);
   if (!to) {
     console.error('No email address configured for team', {
       ticketId: ticket.id,

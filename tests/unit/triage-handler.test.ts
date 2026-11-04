@@ -41,15 +41,14 @@ function ticket(overrides: Partial<TicketRecord> = {}): TicketRecord {
 
 function record(
   eventName: 'INSERT' | 'MODIFY' | 'REMOVE',
-  entityType: string,
-  id: string,
+  ticketId: string,
   sequence: string,
 ): DynamoDBRecord {
   return {
     eventName,
     dynamodb: {
       SequenceNumber: sequence,
-      NewImage: { entityType: { S: entityType }, id: { S: id } },
+      NewImage: { ticketId: { S: ticketId } },
     },
   };
 }
@@ -75,9 +74,7 @@ describe('triage stream handler', () => {
   });
 
   it('triages a newly inserted ticket', async () => {
-    const result = await handler(
-      eventOf(record('INSERT', 'TICKET', 'tkt_1', '1')),
-    );
+    const result = await handler(eventOf(record('INSERT', 'tkt_1', '1')));
 
     expect(result).toEqual({ batchItemFailures: [] });
     expect(classifyTicket).toHaveBeenCalledOnce();
@@ -88,22 +85,17 @@ describe('triage stream handler', () => {
     );
   });
 
-  it('runs triage once for the three items written per ticket', async () => {
-    await handler(
-      eventOf(
-        record('INSERT', 'TICKET', 'tkt_1', '1'),
-        record('INSERT', 'TICKET_REPORTER', 'tkt_1', '2'),
-        record('INSERT', 'TICKET_EVENT', 'tkt_1_created', '3'),
-      ),
-    );
-    expect(classifyTicket).toHaveBeenCalledOnce();
-    expect(applyTriage).toHaveBeenCalledOnce();
-  });
-
   it.each([
-    ['a MODIFY of a ticket', record('MODIFY', 'TICKET', 'tkt_1', '1')],
-    ['a REMOVE of a ticket', record('REMOVE', 'TICKET', 'tkt_1', '1')],
+    ['a MODIFY of a ticket', record('MODIFY', 'tkt_1', '1')],
+    ['a REMOVE of a ticket', record('REMOVE', 'tkt_1', '1')],
     ['an INSERT without an image', { eventName: 'INSERT' } as DynamoDBRecord],
+    [
+      'an INSERT without a ticket id',
+      {
+        eventName: 'INSERT',
+        dynamodb: { NewImage: {} },
+      } as DynamoDBRecord,
+    ],
   ])('ignores %s', async (_label, rec) => {
     const result = await handler(eventOf(rec));
     expect(result).toEqual({ batchItemFailures: [] });
@@ -128,10 +120,7 @@ describe('triage stream handler', () => {
       .mockResolvedValueOnce(ticket({ id: 'tkt_2' }));
 
     const result = await handler(
-      eventOf(
-        record('INSERT', 'TICKET', 'tkt_1', '1'),
-        record('INSERT', 'TICKET', 'tkt_2', '2'),
-      ),
+      eventOf(record('INSERT', 'tkt_1', '1'), record('INSERT', 'tkt_2', '2')),
     );
 
     expect(result).toEqual({ batchItemFailures: [] });
@@ -145,15 +134,11 @@ describe('triage stream handler', () => {
       impact: 'HIGH',
       urgency: 'HIGH',
     });
-    const invalid = await handler(
-      eventOf(record('INSERT', 'TICKET', 'tkt_1', '1')),
-    );
+    const invalid = await handler(eventOf(record('INSERT', 'tkt_1', '1')));
     expect(invalid).toEqual({ batchItemFailures: [] });
 
     vi.mocked(getTicket).mockResolvedValue(null);
-    const missing = await handler(
-      eventOf(record('INSERT', 'TICKET', 'tkt_9', '2')),
-    );
+    const missing = await handler(eventOf(record('INSERT', 'tkt_9', '2')));
     expect(missing).toEqual({ batchItemFailures: [] });
     expect(applyTriage).not.toHaveBeenCalled();
   });
@@ -162,10 +147,7 @@ describe('triage stream handler', () => {
     vi.mocked(classifyTicket).mockRejectedValue(new Error('throttled'));
 
     const result = await handler(
-      eventOf(
-        record('INSERT', 'TICKET', 'tkt_1', '10'),
-        record('INSERT', 'TICKET', 'tkt_2', '11'),
-      ),
+      eventOf(record('INSERT', 'tkt_1', '10'), record('INSERT', 'tkt_2', '11')),
     );
 
     expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: '10' }] });
@@ -174,7 +156,7 @@ describe('triage stream handler', () => {
 
   it('rethrows a temporary failure when the record has no sequence number', async () => {
     vi.mocked(classifyTicket).mockRejectedValue(new Error('throttled'));
-    const rec = record('INSERT', 'TICKET', 'tkt_1', '1');
+    const rec = record('INSERT', 'tkt_1', '1');
     delete rec.dynamodb?.SequenceNumber;
 
     await expect(handler(eventOf(rec))).rejects.toThrow('throttled');

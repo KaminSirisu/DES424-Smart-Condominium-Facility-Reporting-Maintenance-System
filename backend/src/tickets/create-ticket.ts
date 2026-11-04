@@ -4,6 +4,7 @@ import type {
   APIGatewayProxyStructuredResultV2,
 } from 'aws-lambda';
 import { extractBearerToken, verifyLineToken } from '../shared/line-token.js';
+import { consumeTicketQuota } from '../shared/rate-limit.js';
 import { createTicket, getTicket } from '../shared/ticket-repository.js';
 import {
   UPLOAD_ID_PATTERN,
@@ -31,6 +32,9 @@ import {
  * so a retry targets the same item and the repository's conditional write
  * rejects the duplicate. A retry with the same payload gets the original
  * 201 back; the same key with a different payload is a 409.
+ *
+ * Rate limit (SR-31): a reporter may create 10 tickets per hour, then gets
+ * 429 with Retry-After. See shared/rate-limit.ts.
  */
 
 const IDEMPOTENCY_KEY_MIN = 8;
@@ -48,6 +52,7 @@ const VIEW_FIELDS = [
   'category',
   'suggestedPriority',
   'priority',
+  'prioritySetBy',
   'teamId',
   'acceptedByStaffId',
   'acceptedAt',
@@ -224,9 +229,11 @@ function errorResponse(
   requestId: string,
 ): APIGatewayProxyStructuredResultV2 {
   if (err instanceof ApiError) {
-    return json(err.statusCode, {
-      error: { code: err.code, message: err.message, requestId },
-    });
+    return json(
+      err.statusCode,
+      { error: { code: err.code, message: err.message, requestId } },
+      err.headers,
+    );
   }
   console.error('createTicket failed', { requestId, err });
   return json(500, {
@@ -266,6 +273,18 @@ export async function handler(
         422,
         'UNPROCESSABLE',
         'defectPhotoUploadId does not refer to a completed defect upload of yours.',
+      );
+    }
+
+    // Only requests that would create a ticket count toward the limit, so
+    // retries (replays above) and rejected requests never use it up.
+    const quota = await consumeTicketQuota(lineUserId);
+    if (!quota.allowed) {
+      throw new ApiError(
+        429,
+        'RATE_LIMITED',
+        'Too many reports. Please try again later.',
+        { 'Retry-After': String(quota.retryAfterSeconds) },
       );
     }
 

@@ -9,13 +9,13 @@ import { hasSent, markSent } from './notification-log.js';
 import { sendWorkOrderEmail } from './work-order-email.js';
 
 /**
- * Notification worker (SCFRMS-46, later SCFRMS-45), triggered by the table's
- * DynamoDB Stream.
+ * Notification worker (SCFRMS-46, later SCFRMS-45), triggered by the
+ * TicketEvents table's DynamoDB Stream.
  *
- * Every ticket change writes an audit event item (entityType TICKET_EVENT),
- * and that INSERT is what triggers notifications: the event's `kind` decides
- * which channels fire. Other items in the stream (the ticket, reporter links,
- * and the TICKET_NOTIFICATION records written here) are ignored.
+ * Every ticket change writes an audit event, and that INSERT is what triggers
+ * notifications: the event's `kind` decides which channels fire. Only INSERTs
+ * count; the notification records written here go to their own table, so
+ * they never reach this stream.
  *
  * Each channel is sent at most once per event: hasSent is checked first and
  * markSent recorded after the send (see notification-log.ts). A temporary
@@ -47,11 +47,11 @@ interface AuditEvent {
   kind: string;
 }
 
-/** The audit event of a newly written TICKET_EVENT item, or null for any other record. */
+/** The audit event of a newly inserted TicketEvents item, or null for any other record. */
 function newAuditEvent(record: DynamoDBRecord): AuditEvent | null {
   if (record.eventName !== 'INSERT') return null;
   const image = record.dynamodb?.NewImage;
-  if (image?.entityType?.S !== 'TICKET_EVENT') return null;
+  if (!image) return null;
 
   const ticketId = image.ticketId?.S;
   const eventId = image.id?.S;

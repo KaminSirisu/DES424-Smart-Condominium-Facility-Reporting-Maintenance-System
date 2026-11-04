@@ -13,6 +13,9 @@ vi.mock('../../backend/src/shared/ticket-repository', () => ({
   createTicket: vi.fn(),
   getTicket: vi.fn(),
 }));
+vi.mock('../../backend/src/shared/rate-limit', () => ({
+  consumeTicketQuota: vi.fn(),
+}));
 vi.mock('../../backend/src/shared/upload-store', async (importOriginal) => ({
   ...(await importOriginal<
     typeof import('../../backend/src/shared/upload-store')
@@ -29,6 +32,7 @@ import {
   createTicket,
   getTicket,
 } from '../../backend/src/shared/ticket-repository';
+import { consumeTicketQuota } from '../../backend/src/shared/rate-limit';
 import { uploadExists } from '../../backend/src/shared/upload-store';
 
 const LINE_USER = 'Uabc123';
@@ -87,6 +91,7 @@ describe('POST /tickets (createTicket handler)', () => {
     vi.mocked(getTicket).mockResolvedValue(null);
     vi.mocked(uploadExists).mockResolvedValue(true);
     vi.mocked(createTicket).mockResolvedValue(undefined);
+    vi.mocked(consumeTicketQuota).mockResolvedValue({ allowed: true });
   });
 
   it('stores a RECEIVED ticket and returns a caller-safe 201', async () => {
@@ -124,6 +129,62 @@ describe('POST /tickets (createTicket handler)', () => {
     expect(saved.version).toBe(1);
     expect(saved.photos[0].s3ObjectKey).toBe('uploads/DEFECT/Uabc123/upl_123');
     expect(uploadExists).toHaveBeenCalledWith('DEFECT', LINE_USER, 'upl_123');
+  });
+
+  describe('rate limit (SR-31)', () => {
+    it('counts one creation for the verified reporter', async () => {
+      await handler(makeEvent());
+      expect(consumeTicketQuota).toHaveBeenCalledOnce();
+      expect(consumeTicketQuota).toHaveBeenCalledWith(LINE_USER);
+    });
+
+    it('returns 429 with Retry-After and stores nothing once the limit is used up', async () => {
+      vi.mocked(consumeTicketQuota).mockResolvedValue({
+        allowed: false,
+        retryAfterSeconds: 1234,
+      });
+      const response = await handler(makeEvent());
+
+      expect(response.statusCode).toBe(429);
+      expect(response.headers?.['Retry-After']).toBe('1234');
+      expect(JSON.parse(response.body ?? '').error).toMatchObject({
+        code: 'RATE_LIMITED',
+        requestId: 'req-1',
+      });
+      expect(createTicket).not.toHaveBeenCalled();
+    });
+
+    it('does not count a replay of an existing ticket', async () => {
+      vi.mocked(getTicket).mockResolvedValue(storedRecord());
+      await handler(makeEvent());
+      expect(consumeTicketQuota).not.toHaveBeenCalled();
+    });
+
+    it('still replays when the limit is already used up', async () => {
+      vi.mocked(getTicket).mockResolvedValue(storedRecord());
+      vi.mocked(consumeTicketQuota).mockResolvedValue({
+        allowed: false,
+        retryAfterSeconds: 60,
+      });
+      const response = await handler(makeEvent());
+      expect(response.statusCode).toBe(201);
+    });
+
+    it('does not count requests rejected before a ticket would be created', async () => {
+      await handler(makeEvent({ body: { ...validBody, location: ' ' } }));
+      await handler(makeEvent({ headers: { authorization: undefined } }));
+      vi.mocked(uploadExists).mockResolvedValue(false);
+      await handler(makeEvent());
+      expect(consumeTicketQuota).not.toHaveBeenCalled();
+    });
+
+    it('returns 500 when the counter cannot be updated', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.mocked(consumeTicketQuota).mockRejectedValue(new Error('ddb down'));
+      const response = await handler(makeEvent());
+      expect(response.statusCode).toBe(500);
+      expect(createTicket).not.toHaveBeenCalled();
+    });
   });
 
   it('returns 401 without a bearer token', async () => {

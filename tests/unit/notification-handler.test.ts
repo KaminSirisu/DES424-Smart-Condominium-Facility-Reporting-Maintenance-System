@@ -42,7 +42,6 @@ function ticket(overrides: Partial<TicketRecord> = {}): TicketRecord {
 }
 
 function record(
-  entityType: string,
   kind: string,
   sequence: string,
   eventName: 'INSERT' | 'MODIFY' = 'INSERT',
@@ -53,7 +52,6 @@ function record(
     dynamodb: {
       SequenceNumber: sequence,
       NewImage: {
-        entityType: { S: entityType },
         ticketId: { S: 'tkt_1' },
         id: { S: eventId },
         kind: { S: kind },
@@ -66,7 +64,7 @@ function eventOf(...records: DynamoDBRecord[]): DynamoDBStreamEvent {
   return { Records: records };
 }
 
-const triaged = (sequence = '1') => record('TICKET_EVENT', 'TRIAGED', sequence);
+const triaged = (sequence = '1') => record('TRIAGED', sequence);
 
 describe('notification stream handler', () => {
   beforeEach(() => {
@@ -98,12 +96,18 @@ describe('notification stream handler', () => {
   });
 
   it.each([
-    ['a TICKET_CREATED event', record('TICKET_EVENT', 'TICKET_CREATED', '1')],
-    ['a ticket item', record('TICKET', 'TRIAGED', '1')],
-    ['a reporter link', record('TICKET_REPORTER', 'TRIAGED', '1')],
-    ['a notification record', record('TICKET_NOTIFICATION', 'TRIAGED', '1')],
-    ['a MODIFY of an event', record('TICKET_EVENT', 'TRIAGED', '1', 'MODIFY')],
+    ['a TICKET_CREATED event', record('TICKET_CREATED', '1')],
+    ['a MODIFY of an event', record('TRIAGED', '1', 'MODIFY')],
     ['a record without an image', { eventName: 'INSERT' } as DynamoDBRecord],
+    [
+      'an event without a kind',
+      {
+        eventName: 'INSERT',
+        dynamodb: {
+          NewImage: { ticketId: { S: 'tkt_1' }, id: { S: 'tkt_1_triaged' } },
+        },
+      } as DynamoDBRecord,
+    ],
   ])('ignores %s', async (_label, rec) => {
     const result = await handler(eventOf(rec));
     expect(result).toEqual({ batchItemFailures: [] });
@@ -141,10 +145,7 @@ describe('notification stream handler', () => {
 
   it('handles every event in a batch', async () => {
     await handler(
-      eventOf(
-        triaged('1'),
-        record('TICKET_EVENT', 'TRIAGED', '2', 'INSERT', 'tkt_2_triaged'),
-      ),
+      eventOf(triaged('1'), record('TRIAGED', '2', 'INSERT', 'tkt_2_triaged')),
     );
     expect(sendWorkOrderEmail).toHaveBeenCalledTimes(2);
     expect(markSent).toHaveBeenCalledTimes(2);
@@ -156,7 +157,7 @@ describe('notification stream handler', () => {
     const result = await handler(
       eventOf(
         triaged('10'),
-        record('TICKET_EVENT', 'TRIAGED', '11', 'INSERT', 'tkt_2_triaged'),
+        record('TRIAGED', '11', 'INSERT', 'tkt_2_triaged'),
       ),
     );
 

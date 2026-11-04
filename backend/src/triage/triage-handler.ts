@@ -9,12 +9,10 @@ import type { TriageOutcome } from './apply-classification.js';
 import { ClassifierError, classifyTicket } from './classifier.js';
 
 /**
- * AI triage worker (SCFRMS-41), triggered by the table's DynamoDB Stream.
- *
- * Creating a ticket writes three items (ticket, reporter association, audit
- * event), so the stream carries three INSERTs per ticket; only the one with
- * entityType TICKET starts triage. Later changes to the ticket (MODIFY) are
- * ignored, which also stops the triage update from re-triggering itself.
+ * AI triage worker (SCFRMS-41), triggered by the Tickets table's DynamoDB
+ * Stream. Every INSERT there is a newly created ticket and starts triage.
+ * Later changes to the ticket (MODIFY) are ignored, which also stops the
+ * triage update from re-triggering itself.
  *
  * Failures:
  *  - Permanent (unusable AI reply, missing ticket): logged, no retry. The
@@ -29,9 +27,7 @@ import { ClassifierError, classifyTicket } from './classifier.js';
 /** The ticket id of a newly created ticket, or null for any other record. */
 function newTicketId(record: DynamoDBRecord): string | null {
   if (record.eventName !== 'INSERT') return null;
-  const image = record.dynamodb?.NewImage;
-  if (image?.entityType?.S !== 'TICKET') return null;
-  return image.id?.S ?? null;
+  return record.dynamodb?.NewImage?.ticketId?.S ?? null;
 }
 
 function isPermanentFailure(err: unknown): boolean {

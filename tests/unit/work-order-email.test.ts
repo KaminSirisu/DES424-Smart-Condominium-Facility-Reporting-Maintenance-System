@@ -129,6 +129,41 @@ describe('sendWorkOrderEmail', () => {
     });
   });
 
+  it('prefers the address in the Teams table over TEAM_EMAILS', async () => {
+    const sender = fakeSender();
+    const lookup = vi.fn().mockResolvedValue('plumbing-table@example.com');
+
+    await expect(sendWorkOrderEmail(triaged(), sender, lookup)).resolves.toBe(
+      'SENT',
+    );
+
+    expect(lookup).toHaveBeenCalledWith('PLUMBING');
+    expect(sender.send).toHaveBeenCalledWith(
+      expect.objectContaining({ to: 'plumbing-table@example.com' }),
+    );
+  });
+
+  it('falls back to TEAM_EMAILS when the Teams table has no address', async () => {
+    const sender = fakeSender();
+    const lookup = vi.fn().mockResolvedValue(null);
+
+    await sendWorkOrderEmail(triaged(), sender, lookup);
+
+    expect(sender.send).toHaveBeenCalledWith(
+      expect.objectContaining({ to: 'plumbing@example.com' }),
+    );
+  });
+
+  it('throws when the Teams lookup fails so the caller can retry', async () => {
+    const sender = fakeSender();
+    const lookup = vi.fn().mockRejectedValue(new Error('dynamo down'));
+
+    await expect(sendWorkOrderEmail(triaged(), sender, lookup)).rejects.toThrow(
+      'dynamo down',
+    );
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+
   it('reports NO_RECIPIENT instead of throwing when the team has no address', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.stubEnv('TEAM_EMAILS', '{}');
