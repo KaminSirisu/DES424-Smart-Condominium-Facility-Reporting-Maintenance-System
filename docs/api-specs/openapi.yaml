@@ -17,8 +17,6 @@ tags:
     description: Manager counts and historical analysis.
   - name: Staff auth
     description: Proposed staff session contract pending security review.
-  - name: Internal
-    description: Trusted worker contract, never available to browsers.
 paths:
   /health:
     get:
@@ -233,7 +231,8 @@ paths:
       description: >-
         A technician on the assigned team or a manager may change priority.
         The backend records the actor, previous value, new value, reason, and
-        time. AI classification cannot overwrite a later staff choice.
+        time, and sets prioritySetBy to STAFF. AI classification cannot
+        overwrite a later staff choice.
       operationId: setTicketPriority
       security:
         - staffToken: []
@@ -524,33 +523,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/StaffProfile'
         '401': { $ref: '#/components/responses/Unauthorized' }
-  /internal/tickets/{ticketId}/classification:
-    parameters:
-      - $ref: '#/components/parameters/TicketId'
-    post:
-      tags: [Internal]
-      summary: Record AI classification suggestions from a trusted worker
-      description: >-
-        Proposed internal-only callback to satisfy SCFRMS-31. An event or direct
-        Lambda invocation may replace HTTP. Backend code validates AI suggestions
-        and updates the stored ticket; Bedrock does not write to DynamoDB.
-        Never expose this route to clients.
-      operationId: applyClassification
-      x-internal: true
-      security:
-        - serviceIam: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ClassificationResult'
-      responses:
-        '204': { description: Suggestions recorded and routing initiated. }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
 components:
   securitySchemes:
     lineToken:
@@ -561,11 +533,6 @@ components:
       type: http
       scheme: bearer
       description: Staff credential with backend role checks; session design is pending review.
-    serviceIam:
-      type: apiKey
-      in: header
-      name: Authorization
-      description: Internal AWS-signed authorization placeholder; never a client token.
   parameters:
     TicketId:
       in: path
@@ -619,6 +586,10 @@ components:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
     TooManyRequests:
       description: Caller exceeded a rate limit.
+      headers:
+        Retry-After:
+          description: Seconds until the caller may try again.
+          schema: { type: integer }
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -673,6 +644,12 @@ components:
           { type: string, description: Maintenance domain after triage. }
         suggestedPriority: { $ref: '#/components/schemas/Priority' }
         priority: { $ref: '#/components/schemas/Priority' }
+        prioritySetBy:
+          type: string
+          enum: [AI, STAFF]
+          description: >-
+            Who decided priority: AI for the automatic triage, STAFF after a
+            technician or manager changes it.
         teamId: { type: string }
         acceptedByStaffId:
           type: string
@@ -942,11 +919,3 @@ components:
         name: { type: string }
         role: { type: string, enum: [TECHNICIAN, MANAGER] }
         teamId: { type: string }
-    ClassificationResult:
-      type: object
-      additionalProperties: false
-      required: [category, suggestedPriority, suggestedTeamId]
-      properties:
-        category: { type: string }
-        suggestedPriority: { $ref: '#/components/schemas/Priority' }
-        suggestedTeamId: { type: string }
