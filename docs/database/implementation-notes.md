@@ -1,20 +1,20 @@
 # Backend implementation notes
 
-What the backend code stores and reads today (SCFRMS-40, 41, 45, 46, the SLA-02 safety override and the SR-31 rate limit). The table keys follow the proposal in [DynamoDB access patterns](dynamodb-access-patterns.md) (SCFRMS-28). This file only records what the code does and where it adds to that proposal; additions are marked as proposals for team review. Nothing here has been run against real AWS yet; the tests use mocks.
+What the backend code stores and reads today (SCFRMS-40, 41, 43, 45, 46, the SLA-02 safety override and the SR-31 rate limit). The table keys follow the proposal in [DynamoDB access patterns](dynamodb-access-patterns.md) (SCFRMS-28). This file only records what the code does and where it adds to that proposal; additions are marked as proposals for team review. Nothing here has been run against real AWS yet; the tests use mocks.
 
 ## Tables used
 
 Each table name comes from an environment variable (`backend/src/shared/tables.ts`), so the infrastructure decides the real names.
 
-| Table             | Environment variable          | Keys and indexes                                                                                                   | Written by                                 |
-| ----------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
-| `Tickets`         | `TICKETS_TABLE_NAME`          | PK `ticketId`; `TeamOpenIndex` (`teamStatusKey`, `createdKey`); `CreatedMonthIndex` (`createdMonth`, `createdKey`) | `POST /tickets`, AI triage                 |
-| `TicketReporters` | `TICKET_REPORTERS_TABLE_NAME` | PK `ticketId`, SK `reporterLineUserId`; `ReporterTicketsIndex` (`reporterLineUserId`, `associatedKey`)             | `POST /tickets`; read by the LINE channel  |
-| `TicketPhotos`    | `TICKET_PHOTOS_TABLE_NAME`    | PK `ticketId`, SK `photoId`                                                                                        | `POST /tickets`                            |
-| `TicketEvents`    | `TICKET_EVENTS_TABLE_NAME`    | PK `ticketId`, SK `eventKey` = `<occurredAt>#<eventId>`                                                            | `POST /tickets`, AI triage                 |
-| `Notifications`   | `NOTIFICATIONS_TABLE_NAME`    | PK `ticketId`, SK `notificationKey` = `<eventId>#<channel>:<recipient>`                                            | notification worker (proposal)             |
-| `RateLimits`      | `RATE_LIMITS_TABLE_NAME`      | PK `limitKey`, SK `windowStart` (number); TTL attribute `expiresAt`; no stream                                     | `POST /tickets` (proposal)                 |
-| `Teams`           | `TEAMS_TABLE_NAME`            | PK `teamId`; `email` is a proposed field                                                                           | read by the notification worker (proposal) |
+| Table             | Environment variable          | Keys and indexes                                                                                                   | Written by                                              |
+| ----------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| `Tickets`         | `TICKETS_TABLE_NAME`          | PK `ticketId`; `TeamOpenIndex` (`teamStatusKey`, `createdKey`); `CreatedMonthIndex` (`createdMonth`, `createdKey`) | `POST /tickets`, AI triage, accept and status endpoints |
+| `TicketReporters` | `TICKET_REPORTERS_TABLE_NAME` | PK `ticketId`, SK `reporterLineUserId`; `ReporterTicketsIndex` (`reporterLineUserId`, `associatedKey`)             | `POST /tickets`; read by the LINE channel               |
+| `TicketPhotos`    | `TICKET_PHOTOS_TABLE_NAME`    | PK `ticketId`, SK `photoId`                                                                                        | `POST /tickets`, status endpoint (`DONE`)               |
+| `TicketEvents`    | `TICKET_EVENTS_TABLE_NAME`    | PK `ticketId`, SK `eventKey` = `<occurredAt>#<eventId>`                                                            | `POST /tickets`, AI triage, accept and status endpoints |
+| `Notifications`   | `NOTIFICATIONS_TABLE_NAME`    | PK `ticketId`, SK `notificationKey` = `<eventId>#<channel>:<recipient>`                                            | notification worker (proposal)                          |
+| `RateLimits`      | `RATE_LIMITS_TABLE_NAME`      | PK `limitKey`, SK `windowStart` (number); TTL attribute `expiresAt`; no stream                                     | `POST /tickets` (proposal)                              |
+| `Teams`           | `TEAMS_TABLE_NAME`            | PK `teamId`; `email` is a proposed field                                                                           | read by the notification worker (proposal)              |
 
 The `Accounts` table of SCFRMS-28 is not used by this code yet.
 
@@ -28,11 +28,66 @@ The `Accounts` table of SCFRMS-28 is not used by this code yet.
 
 **Fields stored on the ticket.** The fields of the `Ticket` schema in `openapi.yaml`, plus:
 
-- storage attributes: `ticketId` (the key), `createdMonth` (`YYYY-MM`), `createdKey` (`<createdAt>#<ticketId>`), and at triage `teamStatusKey` (`TEAM#<teamId>#STATUS#ASSIGNED`, which puts the ticket in `TeamOpenIndex`);
+- storage attributes: `ticketId` (the key), `createdMonth` (`YYYY-MM`), `createdKey` (`<createdAt>#<ticketId>`), and `teamStatusKey` (`TEAM#<teamId>#STATUS#ASSIGNED` from triage, `TEAM#<teamId>#STATUS#IN_PROGRESS` while the work is in progress, removed at `DONE`; it puts the ticket in `TeamOpenIndex`);
 - internal fields, never returned to callers: `reporterLineUserId` (the original reporter), `version` (optimistic-locking counter), `safetyHazard` (SLA-02, below), and on each photo `s3ObjectKey`;
-- set at triage: `slaPolicyVersion`, `triagedAt`, and `prioritySetBy` (`AI`; a staff change sets `STAFF`). `prioritySetBy` is part of the `Ticket` schema.
+- set at triage: `slaPolicyVersion`, `triagedAt`, and `prioritySetBy` (`AI`; a staff change sets `STAFF`). `prioritySetBy` is part of the `Ticket` schema;
+- set by the staff endpoints: `acceptedByStaffId` and `acceptedAt` (accept), `completedAt` (`DONE`). `acceptedByStaffId` is returned to staff only, never to a reporter.
 
-**Uploaded images.** An upload lives at S3 key `uploads/<purpose>/<ownerId>/<uploadId>`, where `<purpose>` is `DEFECT` or `REPAIR_PROOF` and `<ownerId>` is the uploader's LINE user ID or staff account ID. An object existing at that key proves its purpose and owner, so `POST /tickets` only checks existence. `POST /uploads` must create objects at exactly this key (`uploadObjectKey()` in `backend/src/shared/upload-store.ts`).
+**Uploaded images.** An upload lives at S3 key `uploads/<purpose>/<ownerId>/<uploadId>`, where `<purpose>` is `DEFECT` or `REPAIR_PROOF` and `<ownerId>` is the uploader's LINE user ID or staff account ID. An object existing at that key proves its purpose and owner, so `POST /tickets` only checks existence, while the `DONE` status also reads the first bytes of the object and accepts only a JPEG, PNG or WebP (SR-21; `uploadIsImage()`). `POST /uploads` must create objects at exactly this key (`uploadObjectKey()` in `backend/src/shared/upload-store.ts`).
+
+## Staff endpoints (SCFRMS-43)
+
+A technician accepts an assigned ticket, then starts and finishes the work. The handlers are `backend/src/tickets/accept-ticket.ts` and `set-status.ts`. They are not routed yet: `local.ts` only serves `/health`, and the API Gateway routes belong to the infrastructure.
+
+**Staff token (SR-08).** Every staff endpoint reads the caller's role and team from a signed token and never from a request field. The token is a JWT signed with HMAC-SHA256 using `STAFF_JWT_SECRET` (at least 32 characters; SR-34 says it lives in Secrets Manager). The staff login that issues it is not built yet (`signStaffToken()` in `backend/src/shared/staff-token.ts` is what it will call).
+
+| Claim           | Meaning                                                             |
+| --------------- | ------------------------------------------------------------------- |
+| `account_id`    | The shared team account or a manager account                        |
+| `role`          | `TECHNICIAN` or `MANAGER`                                           |
+| `team_id`       | Required for a `TECHNICIAN`, left out for a `MANAGER`               |
+| `token_version` | Raised on a password reset or when an account is disabled (SR-10)   |
+| `iat`, `exp`    | Seconds since the epoch; a token lives 12 hours at most (60 s skew) |
+
+A bad, expired or wrongly signed token is `401` with one generic message. Not checked yet: that the account is still active and that `token_version` is current (SR-10). That needs the `Accounts` table, so until the login is built a disabled account's token keeps working until it expires.
+
+**`POST /tickets/{ticketId}/accept`** (`Idempotency-Key` header, 8 to 128 characters). Only a `TECHNICIAN` of the ticket's team may accept; a manager or a technician of another team gets `403`. The ticket must be `ASSIGNED` and not accepted by someone else. The same account accepting again gets `200` with the ticket as it is. One transaction sets `acceptedByStaffId` and `acceptedAt`, raises `version` and writes an `ACCEPTED` event. It is conditional on `ASSIGNED`, the `version` that was read and no existing `acceptedByStaffId`, so when two technicians race exactly one wins and the other gets `409`.
+
+**`PATCH /tickets/{ticketId}/status`** (body `{ "status": "IN_PROGRESS" | "DONE", "proofPhotoUploadId": "..." }`). Only the technician account that accepted the ticket may change its status: another account of the same team gets `403`, a ticket nobody accepted yet gets `409` (`NOT_ACCEPTED`). The allowed moves are `ASSIGNED` to `IN_PROGRESS` and `IN_PROGRESS` to `DONE`; anything else is `409`.
+
+- `IN_PROGRESS` puts the ticket in the team's `IN_PROGRESS` queue (`teamStatusKey`).
+- `DONE` needs `proofPhotoUploadId`: a `REPAIR_PROOF` upload at `uploads/REPAIR_PROOF/<accountId>/<uploadId>` of the calling account whose first bytes are a real image (SR-21), otherwise `422`. It removes the ticket from the open queue, sets `completedAt` (the SLA clock stops, SLA-11) and stores the photo in `TicketPhotos` with `repairCycle`.
+- Asking again for the status the ticket already has, as the accepting account (for `DONE`, with the same photo), gets `200` with the ticket as it is, so a retry after a lost response does not fail.
+- The ticket update, the `STATUS_CHANGED` event and the proof photo are one transaction, conditional on the expected status, the `version` that was read and the accepting account.
+
+| Status | When                                                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Bad body, unknown field, missing `Idempotency-Key` (accept), missing proof photo for `DONE`, proof photo on `IN_PROGRESS` |
+| `401`  | Missing, bad or expired staff token                                                                                       |
+| `403`  | Manager, other team, or (status) a technician who did not accept the ticket                                               |
+| `404`  | Unknown ticket                                                                                                            |
+| `409`  | Already accepted by someone else, not accepted yet, wrong current status, or a lost race                                  |
+| `422`  | Proof photo is not a completed `REPAIR_PROOF` image upload of the caller                                                  |
+
+**Audit events.** Every event id carries what keeps it unique, so a ticket that is accepted again after a reassignment still gets a new event.
+
+| Kind             | Written by      | Event id                         | Extra fields                                             |
+| ---------------- | --------------- | -------------------------------- | -------------------------------------------------------- |
+| `TICKET_CREATED` | `POST /tickets` | `<ticketId>_created`             | `toStatus`                                               |
+| `TRIAGED`        | AI triage       | `<ticketId>_triaged`             | `fromStatus`, `toStatus`, `toPriority`, `toTeamId`       |
+| `ACCEPTED`       | accept          | `<ticketId>_accepted_v<version>` | `actorStaffId`                                           |
+| `STATUS_CHANGED` | status          | `<ticketId>_status_v<version>`   | `fromStatus`, `toStatus`, `actorStaffId`, `proofPhotoId` |
+
+`<version>` is the version the ticket has after the change. The notification worker reads `toStatus` and `proofPhotoId` from the stream record.
+
+**Who sees what.** The staff endpoints return the ticket with `acceptedByStaffId`. Reporter endpoints never do (RR-04): `toTicketView(record, audience)` in `backend/src/tickets/ticket-view.ts` needs the audience, and `POST /tickets` (including a replay after a technician accepted) uses `REPORTER`.
+
+**Decisions and gaps**
+
+- A manager cannot change a status or accept a ticket. The requirements document (RR-12) lets a manager override a status, but `openapi.yaml` says an override needs a separate exception policy, and the team follows `openapi.yaml`.
+- Within one ticket a proof photo id can be stored only once (the photo write is conditional), but nothing stops the same upload from being attached to a different ticket. Single-use uploads (SR-21) need a registry that `POST /uploads` does not have yet.
+- `POST /tickets` still only checks that the defect upload exists; the image signature check of SR-21 is not applied there yet.
+- The reopen endpoint, the photo access endpoint and the staff login are not built (see Who needs to do what).
 
 ## Rate limit (SR-31, proposal)
 
@@ -150,13 +205,14 @@ The reporter gets Flex Messages in LINE, pushed by the same notification worker 
 
 **Messages**
 
-| Audit event kind | Message                                                          | State                                               |
-| ---------------- | ---------------------------------------------------------------- | --------------------------------------------------- |
-| `TICKET_CREATED` | Receipt with the ticket id, location and time                    | Sent                                                |
-| `TRIAGED`        | Assignment notice naming the team                                | Sent                                                |
-| `IN_PROGRESS`    | Work started notice                                              | Builder ready; sent once SCFRMS-43 writes the event |
-| `DONE`           | Completion notice with the proof photo, View details and Re-open | Builder ready; sent once SCFRMS-43 writes the event |
-| `MERGED`         | Merge notice                                                     | Not built; belongs to SCFRMS-44                     |
+| Audit event kind                           | Message                                                          | State                           |
+| ------------------------------------------ | ---------------------------------------------------------------- | ------------------------------- |
+| `TICKET_CREATED`                           | Receipt with the ticket id, location and time                    | Sent                            |
+| `TRIAGED`                                  | Assignment notice naming the team                                | Sent                            |
+| `STATUS_CHANGED`, `toStatus` `IN_PROGRESS` | Work started notice                                              | Sent                            |
+| `STATUS_CHANGED`, `toStatus` `DONE`        | Completion notice with the proof photo, View details and Re-open | Sent                            |
+| `ACCEPTED`                                 | None: the reporter is not told when a technician accepts         | -                               |
+| `MERGED`                                   | Merge notice                                                     | Not built; belongs to SCFRMS-44 |
 
 **Content rules** (Security, Roles & SLA requirements)
 
@@ -167,14 +223,16 @@ The reporter gets Flex Messages in LINE, pushed by the same notification worker 
 
 **Buttons open the LIFF app** (proposal). "View report" and "View details and photo" open `<LIFF_URL>/tickets/<ticketId>`; "Re-open" opens `<LIFF_URL>/tickets/<ticketId>/reopen`. The LIFF app calls the API with the reporter's LINE token, which `POST /tickets/{ticketId}/reopen` needs, and the page can ask `GET /tickets/{ticketId}/photos/{photoId}/access` for a fresh photo link. Because buttons open a page instead of sending a postback to a webhook, there is no LINE webhook and SR-06 (check `X-Line-Signature`) does not apply. Add a webhook only if a postback button is introduced later.
 
-**Proof photo** (proposal from the backend developer, for the team to confirm; to build with SCFRMS-43). The completion notice shows the repair photo, because the Jira task asks for it. LINE only shows an image in a Flex Message when it is an HTTPS JPEG or PNG of at most 1024 by 1024 pixels and about 1 MB, and a phone photo is much bigger. So the backend, not the technician or the reporter, makes a small copy:
+**Proof photo.** The completion notice shows the repair photo, because the Jira task asks for it. LINE only shows an image in a Flex Message when it is an HTTPS JPEG or PNG of at most 1024 by 1024 pixels and about 1 MB, and a phone photo is much bigger. So the backend, not the technician or the reporter, makes a small copy (`backend/src/shared/proof-photo.ts`, image library `sharp`):
 
-1. The technician uploads the original photo as today; the original stays in S3 as the record.
-2. When the `DONE` event arrives, the worker reads the original, makes a JPEG of at most 1024 pixels and under 1 MB, and stores it under a separate S3 prefix (an existing copy is reused on a retry).
-3. The worker signs a short-lived read URL for the small copy (`PROOF_PHOTO_URL_TTL_SECONDS`, proposed default 3600) and puts it in the card.
-4. If the copy cannot be made (unsupported or broken file), the card is sent without a photo and the buttons still work.
+1. The technician uploads the original photo; it stays in S3 untouched as the record.
+2. When the `STATUS_CHANGED` event for `DONE` arrives, the worker finds the photo named by the event's `proofPhotoId`. If a small copy already exists it is reused, otherwise the worker reads the original (up to 25 MB), turns it upright by its EXIF orientation, fits it inside 1024 by 1024 pixels (never enlarging it, transparency on white) and saves a JPEG under 900 KB (quality 80, then 65, 50 and 35 until it fits) at `thumbnails/REPAIR_PROOF/<ticketId>/<photoId>.jpg`. Re-encoding drops the EXIF data, including any GPS position.
+3. The worker signs a short-lived read URL for the small copy (`PROOF_PHOTO_URL_TTL_SECONDS`, default 3600, from 60 to 604800) and puts it in the card.
+4. If any step fails (a broken or unsupported file, a file over 25 MB, an S3 error, a link LINE would reject), the card is sent without a photo and the buttons still work. The reporter is told either way; the failure is logged.
 
 The signed URL expires sooner than the message stays in the chat, so an old card no longer shows the photo; the reporter taps "View details and photo" to see the full photo through the LIFF page. The ticket API still never returns a permanent photo URL or an S3 key.
+
+Not verified on real AWS yet: a URL signed with a Lambda role's temporary credentials carries a long session token, and LINE accepts image URLs of at most 2000 characters. A longer URL is detected and the card goes out without the photo; if that happens in practice, sign with CloudFront signed URLs instead. Such a URL also stops working when the role's credentials expire, even if the lifetime is longer.
 
 **Failures**
 
@@ -183,31 +241,33 @@ The signed URL expires sooner than the message stays in the chat, so an old card
 | LINE rejects the message for good (for example status 400)   | Logged with the status, nothing recorded, not retried.             |
 | Temporary LINE error (401, 403, 429, 5xx) or any other error | Reported as a batch item failure; Lambda retries from that record. |
 | One reporter fails after another was messaged                | The first is already recorded and is skipped on the retry.         |
+| The proof photo link cannot be made                          | The completion notice is sent without the photo; logged.           |
 | LINE already accepted the same retry key (status 409)        | Counted as sent; LINE remembers a retry key for 24 hours.          |
 
 **Configuration**
 
-- Environment: `LINE_CHANNEL_ACCESS_TOKEN`, `BUILDING_SECURITY_PHONE` (optional), `LIFF_URL` (optional; buttons are left out when it is not an https URL) and the table names above. SR-34 says the channel secret and access token must live in AWS Secrets Manager, not in files or Git, so the infrastructure should fill `LINE_CHANNEL_ACCESS_TOKEN` from there at deploy time.
-- IAM for the worker: read on `Tickets`, `TicketPhotos` and `TicketReporters`, and read and write on `Notifications`. SCFRMS-43 adds read and write on the S3 thumbnail prefix and read on the originals.
+- Environment: `LINE_CHANNEL_ACCESS_TOKEN`, `BUILDING_SECURITY_PHONE` (optional), `LIFF_URL` (optional; buttons are left out when it is not an https URL), `UPLOAD_BUCKET_NAME` and `PROOF_PHOTO_URL_TTL_SECONDS` (optional) for the proof photo, and the table names above. SR-34 says the channel secret and access token must live in AWS Secrets Manager, not in files or Git, so the infrastructure should fill `LINE_CHANNEL_ACCESS_TOKEN` from there at deploy time.
+- IAM for the worker: read on `Tickets`, `TicketPhotos` and `TicketReporters`, and read and write on `Notifications`. For the proof photo: `s3:GetObject` on the originals (`uploads/REPAIR_PROOF/*`), and `s3:PutObject` and `s3:GetObject` on `thumbnails/*` (the signed URL works only if the signing role can read the copy).
 - LINE: the LIFF channel and the Messaging API channel must sit under the same LINE provider, and the reporter must have added the Official Account as a friend, or the push fails (SR-05).
 
 ### Who needs to do what
 
-| Who                                         | What                                                                                                                                                                                                                                                             | Needed for                                |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| Backend developer                           | SCFRMS-43: the status API that writes the `IN_PROGRESS` and `DONE` events. Then add the completion channel, the small photo copy, the signed URL (`@aws-sdk/s3-request-presigner` and an image library are not installed yet) and `PROOF_PHOTO_URL_TTL_SECONDS`. | Work started and completion messages      |
-| Backend developer                           | `POST /tickets/{ticketId}/reopen`: only for a `DONE` ticket within 7 days (RR-03), a `REOPENED` event, a new SLA clock (SLA-10). Proposed to be built together with SCFRMS-43; it needs its own Jira task, because no task covers it today.                      | Re-open button                            |
-| Backend developer                           | `GET /tickets/{ticketId}/photos/{photoId}/access` (short-lived read link after an access check). Also not covered by a Jira task today.                                                                                                                          | View details and photo button             |
-| Backend developer                           | The merge notice, with SCFRMS-44.                                                                                                                                                                                                                                | Merge message                             |
-| Frontend developer                          | In the LIFF app: add routing and the pages `/tickets/<ticketId>` (details and photos) and `/tickets/<ticketId>/reopen` (ask for a reason, then call the reopen API with the LINE token and an `Idempotency-Key`). The LIFF app has no router yet.                | All message buttons                       |
-| Frontend developer                          | Ask the reporter to add the Official Account as a friend in the LIFF flow (SR-05).                                                                                                                                                                               | The reporter can receive any push message |
-| Infrastructure owner                        | Create the tables, the streams and the event source mappings (see Stream consumers); store the LINE channel access token in Secrets Manager; give the worker the IAM above; package the image library for Lambda (native code that must be built for Linux).     | Everything in this section                |
-| Whoever manages the LINE Developers Console | Register the LIFF app and set its endpoint URL so that `<LIFF_URL>/tickets/<ticketId>` opens the right page; keep both channels under one provider.                                                                                                              | Message buttons                           |
-| Juristic office (building management)       | Give the building security phone number for `BUILDING_SECURITY_PHONE`. Do not use a made-up number; without one the receipt still lists 191, 199 and 1669.                                                                                                       | SLA-02 receipt before real use            |
-| Team                                        | Confirm the proposals above: the LIFF page paths, the small photo copy made by the backend, and who builds the reopen and photo access endpoints.                                                                                                                | Before SCFRMS-43 starts                   |
+| Who                                         | What                                                                                                                                                                                                                                                                                                                                                                                                               | Needed for                                |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- |
+| Backend developer                           | The staff login `POST /auth/staff/login` and the `Accounts` table: it issues the staff token (claims above) and gives the active and `token_version` check of SR-10. Without it the staff endpoints have no way to get a token.                                                                                                                                                                                    | Staff endpoints in real use               |
+| Backend developer                           | `POST /tickets/{ticketId}/reopen`: only for a `DONE` ticket within 7 days (RR-03), a `REOPENED` event, a new SLA clock (SLA-10). Proposed to be built together with SCFRMS-43; it needs its own Jira task, because no task covers it today.                                                                                                                                                                        | Re-open button                            |
+| Backend developer                           | `GET /tickets/{ticketId}/photos/{photoId}/access` (short-lived read link after an access check). Also not covered by a Jira task today.                                                                                                                                                                                                                                                                            | View details and photo button             |
+| Backend developer                           | The merge notice, with SCFRMS-44.                                                                                                                                                                                                                                                                                                                                                                                  | Merge message                             |
+| Frontend developer                          | In the LIFF app: add routing and the pages `/tickets/<ticketId>` (details and photos) and `/tickets/<ticketId>/reopen` (ask for a reason, then call the reopen API with the LINE token and an `Idempotency-Key`). The LIFF app has no router yet.                                                                                                                                                                  | All message buttons                       |
+| Frontend developer                          | In the staff UI: call `POST /tickets/{ticketId}/accept` before the first `PATCH /tickets/{ticketId}/status`; send `proofPhotoUploadId` of a `REPAIR_PROOF` upload when finishing; read audit events as `ACCEPTED` and `STATUS_CHANGED` with `toStatus` (there are no `IN_PROGRESS` or `DONE` event kinds).                                                                                                         | Technician flow                           |
+| Frontend developer                          | Ask the reporter to add the Official Account as a friend in the LIFF flow (SR-05).                                                                                                                                                                                                                                                                                                                                 | The reporter can receive any push message |
+| Infrastructure owner                        | Create the tables, the streams and the event source mappings (see Stream consumers); store the LINE channel access token and `STAFF_JWT_SECRET` in Secrets Manager; give the worker the IAM above; route `POST /tickets/{ticketId}/accept` and `PATCH /tickets/{ticketId}/status` to the handlers; package `sharp` for the worker's Lambda (native code that must be built for Linux and the Lambda architecture). | Everything in this section                |
+| Whoever manages the LINE Developers Console | Register the LIFF app and set its endpoint URL so that `<LIFF_URL>/tickets/<ticketId>` opens the right page; keep both channels under one provider.                                                                                                                                                                                                                                                                | Message buttons                           |
+| Juristic office (building management)       | Give the building security phone number for `BUILDING_SECURITY_PHONE`. Do not use a made-up number; without one the receipt still lists 191, 199 and 1669.                                                                                                                                                                                                                                                         | SLA-02 receipt before real use            |
+| Team                                        | Confirm the proposals above: the LIFF page paths, the small photo copy made by the backend, and who builds the reopen and photo access endpoints.                                                                                                                                                                                                                                                                  | Before the LIFF pages are built           |
 
 **Not decided yet**
 
 - Who builds the reopen and photo access endpoints, and whether they get their own Jira tasks.
-- Image format and size checks at upload (the S3 content type and size check is still open); a file LINE cannot show falls back to a card without the photo.
-- Whether the work started notice (`IN_PROGRESS`) should be sent for every ticket or only for tickets of some priority.
+- Size limits at upload (the S3 size check is still open). The image type of a repair proof is checked by its first bytes when the ticket is finished, and a file that cannot be made small falls back to a card without the photo.
+- Whether the work started notice (`toStatus` `IN_PROGRESS`) should be sent for every ticket or only for tickets of some priority.
