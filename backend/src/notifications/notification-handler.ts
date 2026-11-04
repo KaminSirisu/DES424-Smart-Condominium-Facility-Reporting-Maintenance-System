@@ -51,7 +51,15 @@ function newAuditEvent(record: DynamoDBRecord): NotificationEvent | null {
   const eventId = image.id?.S;
   const kind = image.kind?.S;
   if (!ticketId || !eventId || !kind) return null;
-  return { ticketId, eventId, kind };
+  const toStatus = image.toStatus?.S;
+  const proofPhotoId = image.proofPhotoId?.S;
+  return {
+    ticketId,
+    eventId,
+    kind,
+    ...(toStatus ? { toStatus } : {}),
+    ...(proofPhotoId ? { proofPhotoId } : {}),
+  };
 }
 
 async function notify(event: NotificationEvent): Promise<void> {

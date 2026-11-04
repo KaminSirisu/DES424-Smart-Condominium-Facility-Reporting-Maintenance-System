@@ -11,10 +11,11 @@ import {
   flexOptionsFromEnv,
 } from '../../backend/src/notifications/line-notification';
 
-const event = (kind: string) => ({
+const event = (kind: string, toStatus?: string) => ({
   ticketId: 'tkt_1',
   eventId: `tkt_1_${kind.toLowerCase()}`,
   kind,
+  ...(toStatus ? { toStatus } : {}),
 });
 
 function ticket(overrides: Partial<TicketRecord> = {}): TicketRecord {
@@ -56,11 +57,15 @@ describe('LINE reporter channel', () => {
     vi.restoreAllMocks();
   });
 
-  it('is triggered by the receipt and the assignment events', () => {
+  it('is triggered by the receipt, assignment and status events', () => {
     const { channel } = setup();
     expect(channel.name).toBe('LINE_REPORTER');
     expect(channel.kinds).toEqual(LINE_KINDS);
-    expect([...channel.kinds]).toEqual(['TICKET_CREATED', 'TRIAGED']);
+    expect([...channel.kinds]).toEqual([
+      'TICKET_CREATED',
+      'TRIAGED',
+      'STATUS_CHANGED',
+    ]);
   });
 
   it('messages every reporter of the ticket', async () => {
@@ -96,6 +101,51 @@ describe('LINE reporter channel', () => {
       'assigned to the Plumbing team',
     );
   });
+
+  it('sends the work started notice when the status became IN_PROGRESS', async () => {
+    const { channel, push } = setup();
+
+    await expect(
+      channel.send(
+        ticket({ status: 'IN_PROGRESS' }),
+        'Uaaa',
+        event('STATUS_CHANGED', 'IN_PROGRESS'),
+      ),
+    ).resolves.toBe(true);
+
+    expect(push.mock.calls[0][1][0].altText).toContain('Work started');
+    expect(push.mock.calls[0][2]).toBe(
+      retryKeyFor('tkt_1_status_changed', 'Uaaa'),
+    );
+  });
+
+  it('sends the completion notice with Re-open when the status became DONE', async () => {
+    const { channel, push } = setup();
+
+    await expect(
+      channel.send(
+        ticket({ status: 'DONE' }),
+        'Uaaa',
+        event('STATUS_CHANGED', 'DONE'),
+      ),
+    ).resolves.toBe(true);
+
+    const message = push.mock.calls[0][1][0];
+    expect(message.altText).toContain('Repair completed');
+    expect(JSON.stringify(message)).toContain('/tickets/tkt_1/reopen');
+    expect(JSON.stringify(message)).not.toContain('"hero"');
+  });
+
+  it.each([undefined, 'ASSIGNED', 'MERGED'])(
+    'sends nothing for a status change to %s',
+    async (toStatus) => {
+      const { channel, push } = setup();
+      await expect(
+        channel.send(ticket(), 'Uaaa', event('STATUS_CHANGED', toStatus)),
+      ).resolves.toBe(false);
+      expect(push).not.toHaveBeenCalled();
+    },
+  );
 
   it('sends nothing for an event kind it has no message for', async () => {
     const { channel, push } = setup();

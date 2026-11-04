@@ -1,9 +1,12 @@
+import { proofPhotoUrl } from '../shared/proof-photo.js';
 import { listReporterIds } from '../shared/ticket-reporters.js';
 import type { TicketRecord } from '../tickets/types.js';
 import type { NotificationChannel, NotificationEvent } from './channel.js';
 import {
   buildAssignedMessage,
+  buildCompletedMessage,
   buildReceiptMessage,
+  buildStartedMessage,
   type FlexOptions,
 } from './line-flex.js';
 import {
@@ -17,14 +20,22 @@ import {
 /**
  * LINE channel (SCFRMS-45): sends a Flex Message to every reporter of the
  * ticket. TICKET_CREATED sends the receipt; TRIAGED sends the assignment
- * notice. The completion notice joins when SCFRMS-43 writes the DONE event.
+ * notice; STATUS_CHANGED sends the work started notice (toStatus IN_PROGRESS)
+ * or the completion notice (toStatus DONE, SCFRMS-43). The completion notice
+ * shows the repair photo as a small copy with a signed URL (see
+ * shared/proof-photo.ts); if that cannot be made the notice is sent without
+ * the photo, because telling the reporter matters more than the picture.
  *
  * Environment: BUILDING_SECURITY_PHONE (shown on the receipt) and LIFF_URL
  * (the https://liff.line.me/<liffId> link that the buttons open); both are
  * optional. The channel access token is read in line-messenger.ts.
  */
 
-export const LINE_KINDS = ['TICKET_CREATED', 'TRIAGED'] as const;
+export const LINE_KINDS = [
+  'TICKET_CREATED',
+  'TRIAGED',
+  'STATUS_CHANGED',
+] as const;
 
 export function flexOptionsFromEnv(): FlexOptions {
   return {
@@ -34,19 +45,59 @@ export function flexOptionsFromEnv(): FlexOptions {
 }
 
 function messageFor(
-  kind: string,
+  event: NotificationEvent,
   ticket: TicketRecord,
   options: FlexOptions,
 ): LineMessage | null {
-  if (kind === 'TICKET_CREATED') return buildReceiptMessage(ticket, options);
-  if (kind === 'TRIAGED') return buildAssignedMessage(ticket, options);
+  if (event.kind === 'TICKET_CREATED') {
+    return buildReceiptMessage(ticket, options);
+  }
+  if (event.kind === 'TRIAGED') return buildAssignedMessage(ticket, options);
+  if (event.kind === 'STATUS_CHANGED') {
+    if (event.toStatus === 'IN_PROGRESS') {
+      return buildStartedMessage(ticket, options);
+    }
+    if (event.toStatus === 'DONE') {
+      return buildCompletedMessage(ticket, options);
+    }
+  }
   return null;
+}
+
+/** The message options, plus the repair photo URL for a completion notice. */
+async function optionsFor(
+  deps: LineChannelDeps,
+  ticket: TicketRecord,
+  event: NotificationEvent,
+): Promise<FlexOptions> {
+  const options = deps.options();
+  const isCompletion =
+    event.kind === 'STATUS_CHANGED' && event.toStatus === 'DONE';
+  if (!isCompletion || !event.proofPhotoId || !deps.proofPhotoUrl) {
+    return options;
+  }
+  try {
+    const url = await deps.proofPhotoUrl(ticket, event.proofPhotoId);
+    return url ? { ...options, proofPhotoUrl: url } : options;
+  } catch (err) {
+    console.error('Proof photo link failed; sending without the photo', {
+      ticketId: event.ticketId,
+      eventId: event.eventId,
+      err,
+    });
+    return options;
+  }
 }
 
 export interface LineChannelDeps {
   sender: LineSender;
   listReporters: (ticketId: string) => Promise<string[]>;
   options: () => FlexOptions;
+  /** A signed URL of the repair photo's small copy; without it no photo is shown. */
+  proofPhotoUrl?: (
+    ticket: TicketRecord,
+    photoId: string,
+  ) => Promise<string | null>;
 }
 
 export function createLineChannel(
@@ -54,6 +105,7 @@ export function createLineChannel(
     sender: lineSender,
     listReporters: listReporterIds,
     options: flexOptionsFromEnv,
+    proofPhotoUrl,
   },
 ): NotificationChannel {
   return {
@@ -65,7 +117,11 @@ export function createLineChannel(
       lineUserId: string,
       event: NotificationEvent,
     ) {
-      const message = messageFor(event.kind, ticket, deps.options());
+      const message = messageFor(
+        event,
+        ticket,
+        await optionsFor(deps, ticket, event),
+      );
       if (!message) return false;
 
       try {

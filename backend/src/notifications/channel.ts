@@ -11,6 +11,10 @@ export interface NotificationEvent {
   ticketId: string;
   eventId: string;
   kind: string;
+  /** The status a STATUS_CHANGED event moved the ticket to. */
+  toStatus?: string;
+  /** The REPAIR_PROOF photo that a DONE status change was made with. */
+  proofPhotoId?: string;
 }
 
 export interface NotificationChannel {
