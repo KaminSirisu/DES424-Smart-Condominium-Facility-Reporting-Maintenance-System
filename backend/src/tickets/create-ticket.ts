@@ -11,13 +11,8 @@ import {
   uploadExists,
   uploadObjectKey,
 } from '../shared/upload-store.js';
-import {
-  ApiError,
-  CreateTicketInput,
-  StoredTicketPhoto,
-  TicketPhoto,
-  TicketRecord,
-} from './types.js';
+import { toTicketView } from './ticket-view.js';
+import { ApiError, CreateTicketInput, TicketRecord } from './types.js';
 
 /**
  * POST /tickets — submit a facility defect report (SCFRMS-40).
@@ -41,53 +36,6 @@ const IDEMPOTENCY_KEY_MIN = 8;
 const IDEMPOTENCY_KEY_MAX = 128;
 const DESCRIPTION_MAX = 2000;
 const ALLOWED_FIELDS = ['location', 'description', 'defectPhotoUploadId'];
-
-// `photos` is added separately in toTicketView so S3 keys never leak.
-const VIEW_FIELDS = [
-  'id',
-  'location',
-  'description',
-  'status',
-  'repairCycle',
-  'category',
-  'suggestedPriority',
-  'priority',
-  'prioritySetBy',
-  'teamId',
-  'acceptedByStaffId',
-  'acceptedAt',
-  'deadlineAt',
-  'completedAt',
-  'mergedIntoTicketId',
-  'createdAt',
-  'updatedAt',
-] as const satisfies readonly (keyof TicketRecord)[];
-
-/** Caller-visible photo metadata only — never the private S3 key. */
-function toPhotoView(photo: StoredTicketPhoto): TicketPhoto {
-  const view: TicketPhoto = {
-    id: photo.id,
-    purpose: photo.purpose,
-    addedAt: photo.addedAt,
-  };
-  if (photo.repairCycle !== undefined) view.repairCycle = photo.repairCycle;
-  return view;
-}
-
-/**
- * Caller-safe view of a ticket. An allowlist, not a denylist: records read
- * back from DynamoDB also carry key attributes (PK, SK, ...) and internal
- * fields (version, photo S3 keys, reporterLineUserId) that must never reach
- * the caller.
- */
-export function toTicketView(record: TicketRecord): Record<string, unknown> {
-  const view: Record<string, unknown> = {};
-  for (const field of VIEW_FIELDS) {
-    if (record[field] !== undefined) view[field] = record[field];
-  }
-  view.photos = record.photos.map(toPhotoView);
-  return view;
-}
 
 export function deriveTicketId(
   lineUserId: string,
@@ -207,7 +155,9 @@ function json(
 }
 
 function created(record: TicketRecord): APIGatewayProxyStructuredResultV2 {
-  return json(201, toTicketView(record), { Location: `/tickets/${record.id}` });
+  return json(201, toTicketView(record, 'REPORTER'), {
+    Location: `/tickets/${record.id}`,
+  });
 }
 
 function replay(

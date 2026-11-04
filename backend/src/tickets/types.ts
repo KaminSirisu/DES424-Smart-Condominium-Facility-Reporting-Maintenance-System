@@ -118,6 +118,10 @@ export interface TicketEventRecord {
   toStatus?: TicketStatus;
   toPriority?: Priority;
   toTeamId?: string;
+  /** The staff account that did it (openapi TicketEvent.actorStaffId). */
+  actorStaffId?: string;
+  /** The REPAIR_PROOF photo that allowed the DONE status. */
+  proofPhotoId?: string;
   /** Why the change was made, when it was not an ordinary one (openapi TicketEvent.note). */
   note?: string;
   repairCycle?: number;

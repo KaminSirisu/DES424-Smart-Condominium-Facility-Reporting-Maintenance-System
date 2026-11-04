@@ -295,3 +295,180 @@ export async function applyTriage(
     }),
   );
 }
+
+/**
+ * A technician accepts an ASSIGNED ticket (openapi acceptTicket): records the
+ * account and the time without changing the status, and adds an ACCEPTED
+ * audit event, in one transaction.
+ *
+ * Only succeeds while the ticket is still ASSIGNED at the version that was
+ * read and nobody has accepted it. Otherwise it fails with
+ * TransactionCanceledException (reason ConditionalCheckFailed at index 0).
+ *
+ * The event id carries the version the ticket gets, so a ticket that is
+ * accepted again after a reassignment still has a unique event.
+ */
+export async function acceptTicket(
+  ticket: TicketRecord,
+  accountId: string,
+  now: string,
+): Promise<void> {
+  const event: TicketEventRecord = {
+    id: `${ticket.id}_accepted_v${ticket.version + 1}`,
+    ticketId: ticket.id,
+    kind: 'ACCEPTED',
+    occurredAt: now,
+    actorType: 'STAFF',
+    actorStaffId: accountId,
+    repairCycle: ticket.repairCycle,
+  };
+
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: tableName('TICKETS'),
+            Key: { ticketId: ticket.id },
+            ConditionExpression:
+              '#status = :assigned AND #version = :version AND ' +
+              'attribute_not_exists(acceptedByStaffId)',
+            UpdateExpression:
+              'SET acceptedByStaffId = :account, acceptedAt = :now, ' +
+              'updatedAt = :now, #version = #version + :one',
+            ExpressionAttributeNames: {
+              '#status': 'status',
+              '#version': 'version',
+            },
+            ExpressionAttributeValues: {
+              ':assigned': 'ASSIGNED',
+              ':version': ticket.version,
+              ':one': 1,
+              ':account': accountId,
+              ':now': now,
+            },
+          },
+        },
+        {
+          Put: {
+            TableName: tableName('TICKET_EVENTS'),
+            Item: toEventItem(event),
+          },
+        },
+      ],
+    }),
+  );
+}
+
+export interface StatusChange {
+  to: 'IN_PROGRESS' | 'DONE';
+  /** The accepting staff account; only it may change the status. */
+  accountId: string;
+  now: string;
+  /** The verified REPAIR_PROOF upload; required for DONE. */
+  proof?: { photoId: string; s3ObjectKey: string };
+}
+
+/**
+ * Moves a ticket ASSIGNED -> IN_PROGRESS or IN_PROGRESS -> DONE, in one
+ * transaction with a STATUS_CHANGED audit event.
+ *
+ *  - IN_PROGRESS puts the ticket in the team's IN_PROGRESS queue
+ *    (`teamStatusKey`); DONE removes it from the open queue.
+ *  - DONE also stores the repair proof photo (TicketPhotos) and `completedAt`.
+ *
+ * Only succeeds if the ticket is in the expected status at the version that
+ * was read and the same account accepted it. Otherwise it fails with
+ * TransactionCanceledException (reason ConditionalCheckFailed at index 0).
+ */
+export async function changeTicketStatus(
+  ticket: TicketRecord,
+  change: StatusChange,
+): Promise<void> {
+  const done = change.to === 'DONE';
+  if (done && !change.proof) {
+    throw new Error('A DONE status needs a proof photo.');
+  }
+  if (!done && !ticket.teamId) {
+    throw new Error(`Ticket ${ticket.id} has no team.`);
+  }
+
+  const from = done ? 'IN_PROGRESS' : 'ASSIGNED';
+  const event: TicketEventRecord = {
+    id: `${ticket.id}_status_v${ticket.version + 1}`,
+    ticketId: ticket.id,
+    kind: 'STATUS_CHANGED',
+    occurredAt: change.now,
+    actorType: 'STAFF',
+    actorStaffId: change.accountId,
+    fromStatus: from,
+    toStatus: change.to,
+    repairCycle: ticket.repairCycle,
+    ...(change.proof ? { proofPhotoId: change.proof.photoId } : {}),
+  };
+
+  const values: Record<string, unknown> = {
+    ':from': from,
+    ':to': change.to,
+    ':version': ticket.version,
+    ':one': 1,
+    ':account': change.accountId,
+    ':now': change.now,
+  };
+  let update: string;
+  if (done) {
+    update =
+      'SET #status = :to, completedAt = :now, updatedAt = :now, ' +
+      '#version = #version + :one REMOVE teamStatusKey';
+  } else {
+    update =
+      'SET #status = :to, updatedAt = :now, #version = #version + :one, ' +
+      'teamStatusKey = :teamStatusKey';
+    values[':teamStatusKey'] = `TEAM#${ticket.teamId}#STATUS#IN_PROGRESS`;
+  }
+
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: tableName('TICKETS'),
+            Key: { ticketId: ticket.id },
+            ConditionExpression:
+              '#status = :from AND #version = :version AND ' +
+              'acceptedByStaffId = :account',
+            UpdateExpression: update,
+            ExpressionAttributeNames: {
+              '#status': 'status',
+              '#version': 'version',
+            },
+            ExpressionAttributeValues: values,
+          },
+        },
+        {
+          Put: {
+            TableName: tableName('TICKET_EVENTS'),
+            Item: toEventItem(event),
+          },
+        },
+        ...(change.proof
+          ? [
+              {
+                Put: {
+                  TableName: tableName('TICKET_PHOTOS'),
+                  Item: toPhotoItem(ticket.id, {
+                    id: change.proof.photoId,
+                    purpose: 'REPAIR_PROOF',
+                    addedAt: change.now,
+                    repairCycle: ticket.repairCycle,
+                    s3ObjectKey: change.proof.s3ObjectKey,
+                  }),
+                  ConditionExpression: 'attribute_not_exists(photoId)',
+                },
+              },
+            ]
+          : []),
+      ],
+    }),
+  );
+}
