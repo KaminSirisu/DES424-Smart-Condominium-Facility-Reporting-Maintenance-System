@@ -4,51 +4,45 @@ import type {
   DynamoDBStreamEvent,
 } from 'aws-lambda';
 import { getTicket } from '../shared/ticket-repository.js';
-import type { TicketRecord } from '../tickets/types.js';
+import type { NotificationChannel, NotificationEvent } from './channel.js';
+import { lineReporterChannel } from './line-notification.js';
 import { hasSent, markSent } from './notification-log.js';
 import { sendWorkOrderEmail } from './work-order-email.js';
 
 /**
- * Notification worker (SCFRMS-46, later SCFRMS-45), triggered by the
- * TicketEvents table's DynamoDB Stream.
+ * Notification worker (SCFRMS-45, SCFRMS-46), triggered by the TicketEvents
+ * table's DynamoDB Stream.
  *
  * Every ticket change writes an audit event, and that INSERT is what triggers
- * notifications: the event's `kind` decides which channels fire. Only INSERTs
- * count; the notification records written here go to their own table, so
- * they never reach this stream.
+ * notifications: the event's `kind` decides which channels fire, and each
+ * channel names its recipients (the team for email, every reporter for
+ * LINE). Only INSERTs count; the notification records written here go to
+ * their own table, so they never reach this stream.
  *
- * Each channel is sent at most once per event: hasSent is checked first and
- * markSent recorded after the send (see notification-log.ts). A temporary
+ * Each recipient is messaged at most once per event: hasSent is checked first
+ * and markSent recorded after the send (see notification-log.ts). A temporary
  * failure is reported as a partial batch failure so Lambda retries from that
- * record; channels that already sent are skipped on the retry. Needs
- * ReportBatchItemFailures on the event source mapping.
+ * record; recipients that already got their message are skipped on the retry.
+ * Needs ReportBatchItemFailures on the event source mapping.
+ *
+ * Logs name the channel only, never the recipient: a recipient can be a LINE
+ * user id, which must stay out of logs (SR-35).
  */
 
-interface NotificationChannel {
-  /** Stored in the notification log, so never rename a channel once live. */
-  name: string;
-  /** Audit event kinds that trigger this channel. */
-  kinds: readonly string[];
-  /** Returns true if a message was actually sent. */
-  send(ticket: TicketRecord): Promise<boolean>;
-}
+const emailTeamChannel: NotificationChannel = {
+  name: 'EMAIL_TEAM',
+  kinds: ['TRIAGED'],
+  recipients: async (ticket) => [ticket.teamId ?? 'UNASSIGNED'],
+  send: async (ticket) => (await sendWorkOrderEmail(ticket)) === 'SENT',
+};
 
 export const CHANNELS: readonly NotificationChannel[] = [
-  {
-    name: 'EMAIL_TEAM',
-    kinds: ['TRIAGED'],
-    send: async (ticket) => (await sendWorkOrderEmail(ticket)) === 'SENT',
-  },
+  emailTeamChannel,
+  lineReporterChannel,
 ];
 
-interface AuditEvent {
-  ticketId: string;
-  eventId: string;
-  kind: string;
-}
-
 /** The audit event of a newly inserted TicketEvents item, or null for any other record. */
-function newAuditEvent(record: DynamoDBRecord): AuditEvent | null {
+function newAuditEvent(record: DynamoDBRecord): NotificationEvent | null {
   if (record.eventName !== 'INSERT') return null;
   const image = record.dynamodb?.NewImage;
   if (!image) return null;
@@ -60,16 +54,9 @@ function newAuditEvent(record: DynamoDBRecord): AuditEvent | null {
   return { ticketId, eventId, kind };
 }
 
-async function notify(event: AuditEvent): Promise<void> {
+async function notify(event: NotificationEvent): Promise<void> {
   const channels = CHANNELS.filter((c) => c.kinds.includes(event.kind));
-
-  const pending: NotificationChannel[] = [];
-  for (const channel of channels) {
-    if (!(await hasSent(event.ticketId, event.eventId, channel.name))) {
-      pending.push(channel);
-    }
-  }
-  if (pending.length === 0) return;
+  if (channels.length === 0) return;
 
   const ticket = await getTicket(event.ticketId);
   if (!ticket) {
@@ -77,19 +64,24 @@ async function notify(event: AuditEvent): Promise<void> {
     return;
   }
 
-  for (const channel of pending) {
-    if (await channel.send(ticket)) {
-      await markSent(
-        event.ticketId,
-        event.eventId,
-        channel.name,
-        new Date().toISOString(),
-      );
-      console.info('Notification sent', {
-        ticketId: event.ticketId,
-        eventId: event.eventId,
-        channel: channel.name,
-      });
+  for (const channel of channels) {
+    for (const recipient of await channel.recipients(ticket)) {
+      const logKey = `${channel.name}:${recipient}`;
+      if (await hasSent(event.ticketId, event.eventId, logKey)) continue;
+
+      if (await channel.send(ticket, recipient, event)) {
+        await markSent(
+          event.ticketId,
+          event.eventId,
+          logKey,
+          new Date().toISOString(),
+        );
+        console.info('Notification sent', {
+          ticketId: event.ticketId,
+          eventId: event.eventId,
+          channel: channel.name,
+        });
+      }
     }
   }
 }

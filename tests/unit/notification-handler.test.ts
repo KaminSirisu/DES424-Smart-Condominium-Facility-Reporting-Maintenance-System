@@ -12,6 +12,14 @@ vi.mock('../../backend/src/notifications/notification-log', () => ({
 vi.mock('../../backend/src/notifications/work-order-email', () => ({
   sendWorkOrderEmail: vi.fn(),
 }));
+vi.mock('../../backend/src/notifications/line-notification', () => ({
+  lineReporterChannel: {
+    name: 'LINE_REPORTER',
+    kinds: ['TICKET_CREATED', 'TRIAGED'],
+    recipients: vi.fn(),
+    send: vi.fn(),
+  },
+}));
 
 import { handler } from '../../backend/src/notifications/notification-handler';
 import { getTicket } from '../../backend/src/shared/ticket-repository';
@@ -20,6 +28,10 @@ import {
   markSent,
 } from '../../backend/src/notifications/notification-log';
 import { sendWorkOrderEmail } from '../../backend/src/notifications/work-order-email';
+import { lineReporterChannel } from '../../backend/src/notifications/line-notification';
+
+const lineRecipients = vi.mocked(lineReporterChannel.recipients);
+const lineSend = vi.mocked(lineReporterChannel.send);
 
 function ticket(overrides: Partial<TicketRecord> = {}): TicketRecord {
   return {
@@ -30,7 +42,7 @@ function ticket(overrides: Partial<TicketRecord> = {}): TicketRecord {
     repairCycle: 1,
     photos: [],
     version: 2,
-    reporterLineUserId: 'Uabc123',
+    reporterLineUserId: 'Uaaa',
     category: 'PLUMBING',
     priority: 'CRITICAL',
     teamId: 'PLUMBING',
@@ -45,7 +57,7 @@ function record(
   kind: string,
   sequence: string,
   eventName: 'INSERT' | 'MODIFY' = 'INSERT',
-  eventId = 'tkt_1_triaged',
+  eventId = `tkt_1_${kind.toLowerCase()}`,
 ): DynamoDBRecord {
   return {
     eventName,
@@ -65,6 +77,7 @@ function eventOf(...records: DynamoDBRecord[]): DynamoDBStreamEvent {
 }
 
 const triaged = (sequence = '1') => record('TRIAGED', sequence);
+const created = (sequence = '1') => record('TICKET_CREATED', sequence);
 
 describe('notification stream handler', () => {
   beforeEach(() => {
@@ -75,28 +88,58 @@ describe('notification stream handler', () => {
     vi.mocked(markSent).mockResolvedValue(undefined);
     vi.mocked(getTicket).mockResolvedValue(ticket());
     vi.mocked(sendWorkOrderEmail).mockResolvedValue('SENT');
+    lineRecipients.mockResolvedValue(['Uaaa', 'Ubbb']);
+    lineSend.mockResolvedValue(true);
   });
 
-  it('emails the team when a ticket is triaged and records it', async () => {
+  it('emails the team and messages every reporter when a ticket is triaged', async () => {
     const result = await handler(eventOf(triaged()));
 
     expect(result).toEqual({ batchItemFailures: [] });
-    expect(hasSent).toHaveBeenCalledWith(
-      'tkt_1',
-      'tkt_1_triaged',
-      'EMAIL_TEAM',
-    );
     expect(sendWorkOrderEmail).toHaveBeenCalledWith(ticket());
+    expect(lineSend).toHaveBeenCalledTimes(2);
+    expect(lineSend).toHaveBeenCalledWith(ticket(), 'Uaaa', {
+      ticketId: 'tkt_1',
+      eventId: 'tkt_1_triaged',
+      kind: 'TRIAGED',
+    });
+    expect(lineSend).toHaveBeenCalledWith(
+      ticket(),
+      'Ubbb',
+      expect.objectContaining({ kind: 'TRIAGED' }),
+    );
+    expect(
+      vi.mocked(markSent).mock.calls.map((call) => call.slice(0, 3)),
+    ).toEqual([
+      ['tkt_1', 'tkt_1_triaged', 'EMAIL_TEAM:PLUMBING'],
+      ['tkt_1', 'tkt_1_triaged', 'LINE_REPORTER:Uaaa'],
+      ['tkt_1', 'tkt_1_triaged', 'LINE_REPORTER:Ubbb'],
+    ]);
     expect(markSent).toHaveBeenCalledWith(
       'tkt_1',
       'tkt_1_triaged',
-      'EMAIL_TEAM',
+      'EMAIL_TEAM:PLUMBING',
       expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     );
   });
 
+  it('sends only the LINE receipt when a ticket is created', async () => {
+    await handler(eventOf(created()));
+
+    expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).toHaveBeenCalledTimes(2);
+    expect(lineSend).toHaveBeenCalledWith(
+      ticket(),
+      'Uaaa',
+      expect.objectContaining({
+        kind: 'TICKET_CREATED',
+        eventId: 'tkt_1_ticket_created',
+      }),
+    );
+  });
+
   it.each([
-    ['a TICKET_CREATED event', record('TICKET_CREATED', '1')],
+    ['an event kind no channel handles', record('PRIORITY_CHANGED', '1')],
     ['a MODIFY of an event', record('TRIAGED', '1', 'MODIFY')],
     ['a record without an image', { eventName: 'INSERT' } as DynamoDBRecord],
     [
@@ -112,21 +155,41 @@ describe('notification stream handler', () => {
     const result = await handler(eventOf(rec));
     expect(result).toEqual({ batchItemFailures: [] });
     expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).not.toHaveBeenCalled();
     expect(getTicket).not.toHaveBeenCalled();
   });
 
-  it('does not send again for an event that was already handled', async () => {
+  it('skips a recipient that already got the message and still messages the rest', async () => {
+    vi.mocked(hasSent).mockImplementation(
+      async (_ticketId, _eventId, key) =>
+        key === 'EMAIL_TEAM:PLUMBING' || key === 'LINE_REPORTER:Uaaa',
+    );
+
+    await handler(eventOf(triaged()));
+
+    expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).toHaveBeenCalledTimes(1);
+    expect(lineSend).toHaveBeenCalledWith(
+      ticket(),
+      'Ubbb',
+      expect.objectContaining({ kind: 'TRIAGED' }),
+    );
+    expect(markSent).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends nothing again for an event that was fully handled', async () => {
     vi.mocked(hasSent).mockResolvedValue(true);
 
     await handler(eventOf(triaged()));
 
-    expect(getTicket).not.toHaveBeenCalled();
     expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).not.toHaveBeenCalled();
     expect(markSent).not.toHaveBeenCalled();
   });
 
-  it('does not record anything when no email was sent', async () => {
+  it('does not record a message that was not actually sent', async () => {
     vi.mocked(sendWorkOrderEmail).mockResolvedValue('NO_RECIPIENT');
+    lineSend.mockResolvedValue(false);
 
     const result = await handler(eventOf(triaged()));
 
@@ -141,24 +204,44 @@ describe('notification stream handler', () => {
 
     expect(result).toEqual({ batchItemFailures: [] });
     expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).not.toHaveBeenCalled();
   });
 
   it('handles every event in a batch', async () => {
     await handler(
-      eventOf(triaged('1'), record('TRIAGED', '2', 'INSERT', 'tkt_2_triaged')),
+      eventOf(
+        created('1'),
+        triaged('2'),
+        record('TRIAGED', '3', 'INSERT', 'e3'),
+      ),
     );
+    // created: 2 LINE; triaged: 1 email + 2 LINE; third event: same keys but another event id
+    expect(lineSend).toHaveBeenCalledTimes(6);
     expect(sendWorkOrderEmail).toHaveBeenCalledTimes(2);
-    expect(markSent).toHaveBeenCalledTimes(2);
   });
 
-  it('reports a temporary failure and stops so Lambda retries from there', async () => {
+  it('keeps the messages already sent when a later recipient fails, and retries from that record', async () => {
+    lineSend.mockImplementation(async (_ticket, recipient) => {
+      if (recipient === 'Ubbb') throw new Error('LINE is down');
+      return true;
+    });
+
+    const result = await handler(
+      eventOf(triaged('10'), record('TRIAGED', '11', 'INSERT', 'e2')),
+    );
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: '10' }] });
+    const recorded = vi.mocked(markSent).mock.calls.map((call) => call[2]);
+    expect(recorded).toEqual(['EMAIL_TEAM:PLUMBING', 'LINE_REPORTER:Uaaa']);
+    // the second event is left for the retry
+    expect(getTicket).toHaveBeenCalledOnce();
+  });
+
+  it('reports a temporary email failure and stops so Lambda retries from there', async () => {
     vi.mocked(sendWorkOrderEmail).mockRejectedValue(new Error('throttled'));
 
     const result = await handler(
-      eventOf(
-        triaged('10'),
-        record('TRIAGED', '11', 'INSERT', 'tkt_2_triaged'),
-      ),
+      eventOf(triaged('10'), record('TRIAGED', '11', 'INSERT', 'e2')),
     );
 
     expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: '10' }] });
@@ -166,7 +249,7 @@ describe('notification stream handler', () => {
     expect(markSent).not.toHaveBeenCalled();
   });
 
-  it('retries when recording the send fails, rather than losing the record', async () => {
+  it('retries when recording a send fails, rather than losing the record', async () => {
     vi.mocked(markSent).mockRejectedValue(new Error('dynamo down'));
 
     const result = await handler(eventOf(triaged('7')));
@@ -180,5 +263,20 @@ describe('notification stream handler', () => {
     delete rec.dynamodb?.SequenceNumber;
 
     await expect(handler(eventOf(rec))).rejects.toThrow('throttled');
+  });
+
+  it('never writes a recipient LINE user id to the logs (SR-35)', async () => {
+    lineSend.mockRejectedValueOnce(new Error('LINE is down'));
+
+    await handler(eventOf(triaged('5')));
+    await handler(eventOf(created('6')));
+
+    const logged = JSON.stringify([
+      ...vi.mocked(console.info).mock.calls,
+      ...vi.mocked(console.error).mock.calls,
+    ]);
+    expect(logged).not.toContain('Uaaa');
+    expect(logged).not.toContain('Ubbb');
+    expect(logged).toContain('LINE_REPORTER');
   });
 });
