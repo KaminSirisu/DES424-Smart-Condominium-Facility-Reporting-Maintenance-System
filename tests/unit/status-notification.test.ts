@@ -46,7 +46,6 @@ const ticket: TicketRecord = {
   version: 5,
   reporterLineUserId: 'Uaaa',
   teamId: 'PLUMBING',
-  acceptedByStaffId: 'acct_plumbing',
   createdAt: '2026-11-05T08:00:00.000Z',
   updatedAt: '2026-11-05T10:00:00.000Z',
 };
@@ -120,8 +119,10 @@ describe('status change notifications', () => {
     expect(markSent).not.toHaveBeenCalled();
   });
 
-  it('sends nothing for an ACCEPTED event', async () => {
-    await handler(statusRecord(undefined, 'ACCEPTED', 'tkt_1_accepted_v4'));
+  it('sends nothing for an event kind it has no message for', async () => {
+    await handler(
+      statusRecord(undefined, 'PRIORITY_CHANGED', 'tkt_1_priority_v4'),
+    );
 
     expect(push).not.toHaveBeenCalled();
     expect(getTicket).not.toHaveBeenCalled();

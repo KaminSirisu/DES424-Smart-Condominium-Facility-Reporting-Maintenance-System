@@ -57,7 +57,6 @@ const ticket: TicketRecord = {
   version: 6,
   reporterLineUserId: 'Uaaa',
   teamId: 'PLUMBING',
-  acceptedByStaffId: 'acct_plumbing',
   completedAt: '2026-11-05T11:00:00.000Z',
   createdAt: '2026-11-05T08:00:00.000Z',
   updatedAt: '2026-11-05T11:00:00.000Z',

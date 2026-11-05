@@ -5,18 +5,12 @@ import type { StoredTicketPhoto, TicketPhoto, TicketRecord } from './types.js';
  *
  * An allowlist, not a denylist: records read back from DynamoDB carry
  * internal fields (version, photo S3 keys, reporterLineUserId, safetyHazard)
- * that must never reach a caller. The audience is required, so every response
- * has to decide who is asking:
- *
- *  - a REPORTER never sees `acceptedByStaffId` (staff-visible only in
- *    openapi.yaml, and RR-04: no staff identities for reporters);
- *  - STAFF see it.
+ * that must never reach a caller, so a field appears only if it is listed
+ * here. Every field listed is part of the `Ticket` schema in openapi.yaml.
  */
 
-export type ViewAudience = 'REPORTER' | 'STAFF';
-
 // `photos` is added separately so S3 keys never leak.
-const COMMON_FIELDS = [
+const VISIBLE_FIELDS = [
   'id',
   'location',
   'description',
@@ -27,16 +21,11 @@ const COMMON_FIELDS = [
   'priority',
   'prioritySetBy',
   'teamId',
-  'acceptedAt',
   'deadlineAt',
   'completedAt',
   'mergedIntoTicketId',
   'createdAt',
   'updatedAt',
-] as const satisfies readonly (keyof TicketRecord)[];
-
-const STAFF_ONLY_FIELDS = [
-  'acceptedByStaffId',
 ] as const satisfies readonly (keyof TicketRecord)[];
 
 /** Caller-visible photo metadata only — never the private S3 key. */
@@ -50,17 +39,9 @@ function toPhotoView(photo: StoredTicketPhoto): TicketPhoto {
   return view;
 }
 
-export function toTicketView(
-  record: TicketRecord,
-  audience: ViewAudience,
-): Record<string, unknown> {
-  const fields: readonly (keyof TicketRecord)[] =
-    audience === 'STAFF'
-      ? [...COMMON_FIELDS, ...STAFF_ONLY_FIELDS]
-      : COMMON_FIELDS;
-
+export function toTicketView(record: TicketRecord): Record<string, unknown> {
   const view: Record<string, unknown> = {};
-  for (const field of fields) {
+  for (const field of VISIBLE_FIELDS) {
     if (record[field] !== undefined) view[field] = record[field];
   }
   view.photos = record.photos.map(toPhotoView);

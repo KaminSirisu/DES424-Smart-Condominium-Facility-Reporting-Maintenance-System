@@ -41,9 +41,9 @@ export interface StoredTicketPhoto extends TicketPhoto {
  *
  * On creation (this module), only id/location/description/status/
  * repairCycle/photos/reporterLineUserId/createdAt/updatedAt are set.
- * category, suggestedPriority, priority, teamId, acceptedByStaffId,
- * acceptedAt, deadlineAt, completedAt, mergedIntoTicketId are all absent
- * until a later step (triage, acceptance, status change, merge) sets them.
+ * category, suggestedPriority, priority, teamId, deadlineAt, completedAt,
+ * mergedIntoTicketId are all absent until a later step (triage, status
+ * change, merge) sets them.
  */
 export interface TicketRecord {
   id: string;
@@ -72,8 +72,6 @@ export interface TicketRecord {
   prioritySetBy?: 'AI' | 'STAFF';
   /** Set when the safety override (SLA-02) raised the priority to CRITICAL. */
   safetyHazard?: string;
-  acceptedByStaffId?: string;
-  acceptedAt?: string;
   deadlineAt?: string;
   completedAt?: string;
   mergedIntoTicketId?: string;

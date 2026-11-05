@@ -21,19 +21,20 @@ import { ApiError, TicketRecord } from './types.js';
 /**
  * PATCH /tickets/{ticketId}/status — start or finish repair work (SCFRMS-43).
  *
- * Contract: docs/api-specs/openapi.yaml (setTicketStatus, SetStatus). The
- * accepting technician of the ticket's team moves ASSIGNED -> IN_PROGRESS ->
- * DONE. Nobody else may: another technician of the team and a manager get
- * 403, and a ticket nobody accepted yet is a 409 (accept it first).
+ * Contract: docs/api-specs/openapi.yaml (setTicketStatus, SetStatus). Work is
+ * accepted by the team, not by a person (one shared account per team, SR-07):
+ * any technician of the ticket's team moves ASSIGNED -> IN_PROGRESS -> DONE.
+ * A technician of another team and a manager get 403. The audit event records
+ * the account that made the change.
  *
  * DONE needs `proofPhotoUploadId`: a REPAIR_PROOF upload owned by the calling
  * account whose first bytes are a real image (SR-21), else 422. The status
  * change, the proof photo, `completedAt` and the audit event are written in
  * one transaction (see shared/ticket-repository.ts).
  *
- * Idempotency: asking for the status the ticket already has, as the accepting
- * account (and, for DONE, with the same proof photo), gets 200 with the
- * ticket as it is, so a retry after a lost response does not fail.
+ * Idempotency: asking for the status the ticket already has (and, for DONE,
+ * with the same proof photo) gets 200 with the ticket as it is, so a retry
+ * after a lost response does not fail.
  */
 
 type TargetStatus = 'IN_PROGRESS' | 'DONE';
@@ -128,7 +129,7 @@ export async function handler(
       throw new ApiError(
         403,
         'FORBIDDEN',
-        'Only the accepting technician can change the status.',
+        'Only a technician can change the status.',
       );
     }
 
@@ -143,22 +144,8 @@ export async function handler(
         'This ticket is not assigned to your team.',
       );
     }
-    if (!ticket.acceptedByStaffId) {
-      throw new ApiError(
-        409,
-        'NOT_ACCEPTED',
-        'Accept the ticket before changing its status.',
-      );
-    }
-    if (ticket.acceptedByStaffId !== staff.accountId) {
-      throw new ApiError(
-        403,
-        'FORBIDDEN',
-        'Only the technician who accepted this ticket can change its status.',
-      );
-    }
     if (alreadyDone(ticket, input)) {
-      return json(200, toTicketView(ticket, 'STAFF'));
+      return json(200, toTicketView(ticket));
     }
 
     const expected = input.status === 'DONE' ? 'IN_PROGRESS' : 'ASSIGNED';
@@ -201,12 +188,8 @@ export async function handler(
       if (!isConditionalCheckFailure(err)) throw err;
       // The ticket changed between our read and write; a retry may have won.
       const current = await getTicket(ticketId);
-      if (
-        current &&
-        current.acceptedByStaffId === staff.accountId &&
-        alreadyDone(current, input)
-      ) {
-        return json(200, toTicketView(current, 'STAFF'));
+      if (current && alreadyDone(current, input)) {
+        return json(200, toTicketView(current));
       }
       throw new ApiError(
         409,
@@ -234,7 +217,7 @@ export async function handler(
           ]
         : ticket.photos,
     };
-    return json(200, toTicketView(updated, 'STAFF'));
+    return json(200, toTicketView(updated));
   } catch (err) {
     return errorResponse(
       err,

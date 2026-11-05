@@ -5,10 +5,7 @@ vi.mock('../../backend/src/shared/dynamodb-client.js', () => ({
 }));
 
 import { ddb } from '../../backend/src/shared/dynamodb-client.js';
-import {
-  acceptTicket,
-  changeTicketStatus,
-} from '../../backend/src/shared/ticket-repository.js';
+import { changeTicketStatus } from '../../backend/src/shared/ticket-repository.js';
 import type { TicketRecord } from '../../backend/src/tickets/types.js';
 
 const send = vi.mocked(ddb.send) as unknown as ReturnType<typeof vi.fn>;
@@ -54,52 +51,6 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-describe('acceptTicket', () => {
-  it('records the account and writes an ACCEPTED event in one transaction', async () => {
-    await acceptTicket(ticket(), 'acct_plumbing', NOW);
-
-    expect(send).toHaveBeenCalledOnce();
-    const [update, event] = items();
-    expect(update.Update?.TableName).toBe('TestTickets');
-    expect(update.Update?.Key).toEqual({ ticketId: 'tkt_1' });
-    expect(update.Update?.UpdateExpression).toContain(
-      'acceptedByStaffId = :account',
-    );
-    expect(update.Update?.ExpressionAttributeValues).toMatchObject({
-      ':account': 'acct_plumbing',
-      ':now': NOW,
-      ':version': 2,
-    });
-    expect(event.Put?.TableName).toBe('TestEvents');
-    expect(event.Put?.Item).toMatchObject({
-      ticketId: 'tkt_1',
-      eventKey: `${NOW}#tkt_1_accepted_v3`,
-      id: 'tkt_1_accepted_v3',
-      kind: 'ACCEPTED',
-      actorType: 'STAFF',
-      actorStaffId: 'acct_plumbing',
-      repairCycle: 1,
-    });
-    expect(event.Put?.Item).not.toHaveProperty('toStatus');
-  });
-
-  it('only works on an ASSIGNED ticket nobody accepted, at the version it read', async () => {
-    await acceptTicket(ticket(), 'acct_plumbing', NOW);
-    const condition = items()[0].Update?.ConditionExpression ?? '';
-    expect(condition).toContain('#status = :assigned');
-    expect(condition).toContain('#version = :version');
-    expect(condition).toContain('attribute_not_exists(acceptedByStaffId)');
-    expect(items()[0].Update?.ExpressionAttributeValues).toMatchObject({
-      ':assigned': 'ASSIGNED',
-    });
-  });
-
-  it('does not change the status', async () => {
-    await acceptTicket(ticket(), 'acct_plumbing', NOW);
-    expect(items()[0].Update?.UpdateExpression).not.toContain('#status = :to');
-  });
-});
-
 describe('changeTicketStatus', () => {
   it('starts work: ASSIGNED to IN_PROGRESS, in the team IN_PROGRESS queue', async () => {
     await changeTicketStatus(ticket(), {
@@ -111,13 +62,12 @@ describe('changeTicketStatus', () => {
     expect(items()).toHaveLength(2);
     const [update, event] = items();
     expect(update.Update?.ConditionExpression).toBe(
-      '#status = :from AND #version = :version AND acceptedByStaffId = :account',
+      '#status = :from AND #version = :version',
     );
     expect(update.Update?.ExpressionAttributeValues).toMatchObject({
       ':from': 'ASSIGNED',
       ':to': 'IN_PROGRESS',
       ':version': 2,
-      ':account': 'acct_plumbing',
       ':teamStatusKey': 'TEAM#PLUMBING#STATUS#IN_PROGRESS',
     });
     expect(update.Update?.UpdateExpression).not.toContain('REMOVE');

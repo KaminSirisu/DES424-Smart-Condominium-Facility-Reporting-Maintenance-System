@@ -296,73 +296,9 @@ export async function applyTriage(
   );
 }
 
-/**
- * A technician accepts an ASSIGNED ticket (openapi acceptTicket): records the
- * account and the time without changing the status, and adds an ACCEPTED
- * audit event, in one transaction.
- *
- * Only succeeds while the ticket is still ASSIGNED at the version that was
- * read and nobody has accepted it. Otherwise it fails with
- * TransactionCanceledException (reason ConditionalCheckFailed at index 0).
- *
- * The event id carries the version the ticket gets, so a ticket that is
- * accepted again after a reassignment still has a unique event.
- */
-export async function acceptTicket(
-  ticket: TicketRecord,
-  accountId: string,
-  now: string,
-): Promise<void> {
-  const event: TicketEventRecord = {
-    id: `${ticket.id}_accepted_v${ticket.version + 1}`,
-    ticketId: ticket.id,
-    kind: 'ACCEPTED',
-    occurredAt: now,
-    actorType: 'STAFF',
-    actorStaffId: accountId,
-    repairCycle: ticket.repairCycle,
-  };
-
-  await ddb.send(
-    new TransactWriteCommand({
-      TransactItems: [
-        {
-          Update: {
-            TableName: tableName('TICKETS'),
-            Key: { ticketId: ticket.id },
-            ConditionExpression:
-              '#status = :assigned AND #version = :version AND ' +
-              'attribute_not_exists(acceptedByStaffId)',
-            UpdateExpression:
-              'SET acceptedByStaffId = :account, acceptedAt = :now, ' +
-              'updatedAt = :now, #version = #version + :one',
-            ExpressionAttributeNames: {
-              '#status': 'status',
-              '#version': 'version',
-            },
-            ExpressionAttributeValues: {
-              ':assigned': 'ASSIGNED',
-              ':version': ticket.version,
-              ':one': 1,
-              ':account': accountId,
-              ':now': now,
-            },
-          },
-        },
-        {
-          Put: {
-            TableName: tableName('TICKET_EVENTS'),
-            Item: toEventItem(event),
-          },
-        },
-      ],
-    }),
-  );
-}
-
 export interface StatusChange {
   to: 'IN_PROGRESS' | 'DONE';
-  /** The accepting staff account; only it may change the status. */
+  /** The staff account that makes the change; recorded as the actor of the event. */
   accountId: string;
   now: string;
   /** The verified REPAIR_PROOF upload; required for DONE. */
@@ -378,7 +314,7 @@ export interface StatusChange {
  *  - DONE also stores the repair proof photo (TicketPhotos) and `completedAt`.
  *
  * Only succeeds if the ticket is in the expected status at the version that
- * was read and the same account accepted it. Otherwise it fails with
+ * was read. Otherwise it fails with
  * TransactionCanceledException (reason ConditionalCheckFailed at index 0).
  */
 export async function changeTicketStatus(
@@ -412,7 +348,6 @@ export async function changeTicketStatus(
     ':to': change.to,
     ':version': ticket.version,
     ':one': 1,
-    ':account': change.accountId,
     ':now': change.now,
   };
   let update: string;
@@ -434,9 +369,7 @@ export async function changeTicketStatus(
           Update: {
             TableName: tableName('TICKETS'),
             Key: { ticketId: ticket.id },
-            ConditionExpression:
-              '#status = :from AND #version = :version AND ' +
-              'acceptedByStaffId = :account',
+            ConditionExpression: '#status = :from AND #version = :version',
             UpdateExpression: update,
             ExpressionAttributeNames: {
               '#status': 'status',

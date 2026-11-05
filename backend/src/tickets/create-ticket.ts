@@ -155,7 +155,7 @@ function json(
 }
 
 function created(record: TicketRecord): APIGatewayProxyStructuredResultV2 {
-  return json(201, toTicketView(record, 'REPORTER'), {
+  return json(201, toTicketView(record), {
     Location: `/tickets/${record.id}`,
   });
 }

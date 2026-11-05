@@ -63,8 +63,6 @@ const assigned: TicketRecord = {
   category: 'PLUMBING',
   priority: 'MEDIUM',
   teamId: 'PLUMBING',
-  acceptedByStaffId: 'acct_plumbing',
-  acceptedAt: '2026-11-05T09:00:00.000Z',
   createdAt: '2026-11-05T08:00:00.000Z',
   updatedAt: '2026-11-05T09:00:00.000Z',
 };
@@ -121,9 +119,10 @@ describe('PATCH /tickets/{ticketId}/status', () => {
         now: expect.any(String),
       });
       expect(body(response)).toMatchObject({
+        id: 'tkt_1',
         status: 'IN_PROGRESS',
-        acceptedByStaffId: 'acct_plumbing',
       });
+      expect(body(response)).not.toHaveProperty('reporterLineUserId');
       expect(uploadIsImage).not.toHaveBeenCalled();
     });
 
@@ -283,24 +282,18 @@ describe('PATCH /tickets/{ticketId}/status', () => {
       expect(response.statusCode).toBe(403);
     });
 
-    it('answers 403 to a team account that did not accept the ticket', async () => {
-      vi.mocked(getTicket).mockResolvedValue({
-        ...assigned,
-        acceptedByStaffId: 'acct_plumbing_2',
-      });
-      const response = await handler(event({ status: 'IN_PROGRESS' }));
-      expect(response.statusCode).toBe(403);
-      expect(changeTicketStatus).not.toHaveBeenCalled();
-    });
-
-    it('answers 409 when nobody accepted the ticket yet', async () => {
-      const unaccepted: TicketRecord = { ...assigned };
-      delete unaccepted.acceptedByStaffId;
-      delete unaccepted.acceptedAt;
-      vi.mocked(getTicket).mockResolvedValue(unaccepted);
-      const response = await handler(event({ status: 'IN_PROGRESS' }));
-      expect(response.statusCode).toBe(409);
-      expect(body(response).error.code).toBe('NOT_ACCEPTED');
+    it('lets any technician account of the team do it, and records which one', async () => {
+      const response = await handler(
+        event(
+          { status: 'IN_PROGRESS' },
+          { ...technician, accountId: 'acct_plumbing_2' },
+        ),
+      );
+      expect(response.statusCode).toBe(200);
+      expect(changeTicketStatus).toHaveBeenCalledWith(
+        assigned,
+        expect.objectContaining({ accountId: 'acct_plumbing_2' }),
+      );
     });
 
     it('answers 404 for an unknown ticket', async () => {

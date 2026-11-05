@@ -4,10 +4,8 @@ import type {
 } from 'aws-lambda';
 import { ApiError } from './types.js';
 
-/** HTTP helpers shared by the staff ticket endpoints (accept, status). */
+/** HTTP helpers shared by the staff ticket endpoints. */
 
-const IDEMPOTENCY_KEY_MIN = 8;
-const IDEMPOTENCY_KEY_MAX = 128;
 const TICKET_ID_MAX = 128;
 
 export function json(
@@ -54,23 +52,6 @@ export function ticketIdFromPath(event: APIGatewayProxyEventV2): string {
     throw new ApiError(400, 'BAD_REQUEST', 'ticketId is required.');
   }
   return id;
-}
-
-/** The Idempotency-Key header (8-128 characters), or a 400. */
-export function requireIdempotencyKey(event: APIGatewayProxyEventV2): string {
-  const key = event.headers?.['idempotency-key']?.trim();
-  if (
-    !key ||
-    key.length < IDEMPOTENCY_KEY_MIN ||
-    key.length > IDEMPOTENCY_KEY_MAX
-  ) {
-    throw new ApiError(
-      400,
-      'BAD_REQUEST',
-      `Idempotency-Key header is required (${IDEMPOTENCY_KEY_MIN}-${IDEMPOTENCY_KEY_MAX} characters).`,
-    );
-  }
-  return key;
 }
 
 /**
