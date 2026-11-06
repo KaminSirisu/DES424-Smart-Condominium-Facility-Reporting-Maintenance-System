@@ -62,7 +62,7 @@ describe('LINE reporter channel', () => {
     expect(channel.name).toBe('LINE_REPORTER');
     expect(channel.kinds).toEqual(LINE_KINDS);
     expect([...channel.kinds]).toEqual([
-      'TICKET_CREATED',
+      'CREATED',
       'TRIAGED',
       'STATUS_CHANGED',
     ]);
@@ -80,7 +80,7 @@ describe('LINE reporter channel', () => {
     const { channel, push } = setup();
 
     await expect(
-      channel.send(ticket(), 'Ubbb', event('TICKET_CREATED')),
+      channel.send(ticket(), 'Ubbb', event('CREATED')),
     ).resolves.toBe(true);
 
     const [to, messages, retryKey] = push.mock.calls[0];
@@ -89,7 +89,7 @@ describe('LINE reporter channel', () => {
     expect(messages[0].type).toBe('flex');
     expect(messages[0].altText).toContain('Report received');
     expect(JSON.stringify(messages[0])).toContain('021234567');
-    expect(retryKey).toBe(retryKeyFor('tkt_1_ticket_created', 'Ubbb'));
+    expect(retryKey).toBe(retryKeyFor('tkt_1_created', 'Ubbb'));
   });
 
   it('sends the assignment notice for a triaged ticket', async () => {

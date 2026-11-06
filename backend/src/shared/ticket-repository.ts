@@ -103,7 +103,7 @@ function toCreatedEvent(record: TicketRecord): TicketEventRecord {
   return {
     id: `${record.id}_created`,
     ticketId: record.id,
-    kind: 'TICKET_CREATED',
+    kind: 'CREATED',
     occurredAt: record.createdAt,
     actorType: 'REPORTER',
     toStatus: record.status,
@@ -161,7 +161,7 @@ export async function getTicket(
 
 /**
  * Creates a new ticket together with its reporter association, its photo
- * metadata and its TICKET_CREATED audit event, all-or-nothing. The ticket Put
+ * metadata and its CREATED audit event, all-or-nothing. The ticket Put
  * comes first and is conditional, so a ticket with this id already existing
  * cancels the transaction with TransactionCanceledException (reason
  * ConditionalCheckFailed at index 0) — the caller uses this to detect an
@@ -300,6 +300,8 @@ export interface StatusChange {
   to: 'IN_PROGRESS' | 'DONE';
   /** The staff account that makes the change; recorded as the actor of the event. */
   accountId: string;
+  /** The team of a technician account, recorded on the event (SR-11); a manager has none. */
+  teamId?: string;
   now: string;
   /** The verified REPAIR_PROOF upload; required for DONE. */
   proof?: { photoId: string; s3ObjectKey: string };
@@ -337,6 +339,7 @@ export async function changeTicketStatus(
     occurredAt: change.now,
     actorType: 'STAFF',
     actorStaffId: change.accountId,
+    ...(change.teamId ? { actorTeamId: change.teamId } : {}),
     fromStatus: from,
     toStatus: change.to,
     repairCycle: ticket.repairCycle,

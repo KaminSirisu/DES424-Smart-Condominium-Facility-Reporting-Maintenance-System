@@ -20,7 +20,7 @@ import { ApiError, CreateTicketInput, TicketRecord } from './types.js';
  * Contract: docs/api-specs/openapi.yaml (createTicket). The ticket is stored
  * as RECEIVED with no category/priority/teamId/deadlineAt; AI triage
  * (SCFRMS-41) fills those in afterwards. The ticket, its reporter
- * association and a TICKET_CREATED audit event are written atomically
+ * association and a CREATED audit event are written atomically
  * (see shared/ticket-repository.ts).
  *
  * Idempotency: the ticket id is derived from (lineUserId, Idempotency-Key),

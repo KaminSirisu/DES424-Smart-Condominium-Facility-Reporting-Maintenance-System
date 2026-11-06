@@ -24,7 +24,8 @@ import type { TicketRecord } from '../tickets/types.js';
  * re-encoded, which also drops the photo's EXIF data such as GPS position.
  *
  * Environment: UPLOAD_BUCKET_NAME (the same bucket as the uploads) and
- * PROOF_PHOTO_URL_TTL_SECONDS (default 3600; 60 to 604800).
+ * PROOF_PHOTO_URL_TTL_SECONDS (default 900; 60 to 900, because SR-23 allows
+ * a signed photo URL to live 15 minutes at most).
  */
 
 const s3 = new S3Client({ region: process.env.AWS_REGION });
@@ -36,9 +37,9 @@ export const PROOF_PHOTO_MAX_BYTES = 900_000;
 const MAX_ORIGINAL_BYTES = 25 * 1024 * 1024;
 const JPEG_QUALITIES = [80, 65, 50, 35];
 
-const DEFAULT_TTL_SECONDS = 3600;
+const DEFAULT_TTL_SECONDS = 15 * 60;
 const MIN_TTL_SECONDS = 60;
-const MAX_TTL_SECONDS = 7 * 24 * 60 * 60;
+const MAX_TTL_SECONDS = 15 * 60;
 
 export function thumbnailObjectKey(ticketId: string, photoId: string): string {
   return `thumbnails/REPAIR_PROOF/${ticketId}/${photoId}.jpg`;

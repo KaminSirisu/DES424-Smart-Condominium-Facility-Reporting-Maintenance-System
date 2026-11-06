@@ -15,7 +15,7 @@ vi.mock('../../backend/src/notifications/work-order-email', () => ({
 vi.mock('../../backend/src/notifications/line-notification', () => ({
   lineReporterChannel: {
     name: 'LINE_REPORTER',
-    kinds: ['TICKET_CREATED', 'TRIAGED'],
+    kinds: ['CREATED', 'TRIAGED'],
     recipients: vi.fn(),
     send: vi.fn(),
   },
@@ -77,7 +77,7 @@ function eventOf(...records: DynamoDBRecord[]): DynamoDBStreamEvent {
 }
 
 const triaged = (sequence = '1') => record('TRIAGED', sequence);
-const created = (sequence = '1') => record('TICKET_CREATED', sequence);
+const created = (sequence = '1') => record('CREATED', sequence);
 
 describe('notification stream handler', () => {
   beforeEach(() => {
@@ -132,8 +132,8 @@ describe('notification stream handler', () => {
       ticket(),
       'Uaaa',
       expect.objectContaining({
-        kind: 'TICKET_CREATED',
-        eventId: 'tkt_1_ticket_created',
+        kind: 'CREATED',
+        eventId: 'tkt_1_created',
       }),
     );
   });

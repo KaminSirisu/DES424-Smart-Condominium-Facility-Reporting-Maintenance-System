@@ -24,8 +24,10 @@ import { ApiError, TicketRecord } from './types.js';
  * Contract: docs/api-specs/openapi.yaml (setTicketStatus, SetStatus). Work is
  * accepted by the team, not by a person (one shared account per team, SR-07):
  * any technician of the ticket's team moves ASSIGNED -> IN_PROGRESS -> DONE.
- * A technician of another team and a manager get 403. The audit event records
- * the account that made the change.
+ * A manager and a technician of another team get 403, as openapi.yaml and the
+ * staff UI expect (the requirements document would let a manager override a
+ * status, RR-12, and answer 404 to another team, SR-13). The audit event
+ * records the account and the team (SR-11).
  *
  * DONE needs `proofPhotoUploadId`: a REPAIR_PROOF upload owned by the calling
  * account whose first bytes are a real image (SR-21), else 422. The status
@@ -181,6 +183,7 @@ export async function handler(
       await changeTicketStatus(ticket, {
         to: input.status,
         accountId: staff.accountId,
+        teamId: staff.teamId,
         now,
         ...(proof ? { proof } : {}),
       });

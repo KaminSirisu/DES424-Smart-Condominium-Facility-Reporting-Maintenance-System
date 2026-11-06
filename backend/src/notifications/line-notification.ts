@@ -19,7 +19,7 @@ import {
 
 /**
  * LINE channel (SCFRMS-45): sends a Flex Message to every reporter of the
- * ticket. TICKET_CREATED sends the receipt; TRIAGED sends the assignment
+ * ticket. CREATED sends the receipt; TRIAGED sends the assignment
  * notice; STATUS_CHANGED sends the work started notice (toStatus IN_PROGRESS)
  * or the completion notice (toStatus DONE, SCFRMS-43). The completion notice
  * shows the repair photo as a small copy with a signed URL (see
@@ -31,11 +31,7 @@ import {
  * optional. The channel access token is read in line-messenger.ts.
  */
 
-export const LINE_KINDS = [
-  'TICKET_CREATED',
-  'TRIAGED',
-  'STATUS_CHANGED',
-] as const;
+export const LINE_KINDS = ['CREATED', 'TRIAGED', 'STATUS_CHANGED'] as const;
 
 export function flexOptionsFromEnv(): FlexOptions {
   return {
@@ -49,7 +45,7 @@ function messageFor(
   ticket: TicketRecord,
   options: FlexOptions,
 ): LineMessage | null {
-  if (event.kind === 'TICKET_CREATED') {
+  if (event.kind === 'CREATED') {
     return buildReceiptMessage(ticket, options);
   }
   if (event.kind === 'TRIAGED') return buildAssignedMessage(ticket, options);

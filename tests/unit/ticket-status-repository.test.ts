@@ -56,6 +56,7 @@ describe('changeTicketStatus', () => {
     await changeTicketStatus(ticket(), {
       to: 'IN_PROGRESS',
       accountId: 'acct_plumbing',
+      teamId: 'PLUMBING',
       now: NOW,
     });
 
@@ -76,11 +77,24 @@ describe('changeTicketStatus', () => {
       kind: 'STATUS_CHANGED',
       actorType: 'STAFF',
       actorStaffId: 'acct_plumbing',
+      actorTeamId: 'PLUMBING',
       fromStatus: 'ASSIGNED',
       toStatus: 'IN_PROGRESS',
       repairCycle: 1,
     });
     expect(event.Put?.Item).not.toHaveProperty('proofPhotoId');
+  });
+
+  it('records no team on the event when none is given', async () => {
+    await changeTicketStatus(ticket(), {
+      to: 'IN_PROGRESS',
+      accountId: 'acct_mgr',
+      now: NOW,
+    });
+
+    const [, event] = items();
+    expect(event.Put?.Item).toMatchObject({ actorStaffId: 'acct_mgr' });
+    expect(event.Put?.Item).not.toHaveProperty('actorTeamId');
   });
 
   it('finishes work: IN_PROGRESS to DONE, leaves the queue and stores the proof photo', async () => {

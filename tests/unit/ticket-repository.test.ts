@@ -114,7 +114,7 @@ describe('createTicket', () => {
       ticketId: 'tkt_1',
       eventKey: '2026-10-28T10:00:00.000Z#tkt_1_created',
       id: 'tkt_1_created',
-      kind: 'TICKET_CREATED',
+      kind: 'CREATED',
       actorType: 'REPORTER',
       toStatus: 'RECEIVED',
       repairCycle: 1,

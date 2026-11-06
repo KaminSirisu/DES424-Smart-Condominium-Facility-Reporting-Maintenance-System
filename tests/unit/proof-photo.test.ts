@@ -111,9 +111,9 @@ describe('thumbnailObjectKey', () => {
 describe('proofPhotoTtlSeconds', () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it('defaults to one hour', () => {
+  it('defaults to 15 minutes, the longest SR-23 allows', () => {
     vi.stubEnv('PROOF_PHOTO_URL_TTL_SECONDS', '');
-    expect(proofPhotoTtlSeconds()).toBe(3600);
+    expect(proofPhotoTtlSeconds()).toBe(900);
   });
 
   it('reads PROOF_PHOTO_URL_TTL_SECONDS', () => {
@@ -121,10 +121,15 @@ describe('proofPhotoTtlSeconds', () => {
     expect(proofPhotoTtlSeconds()).toBe(120);
   });
 
-  it.each(['abc', '10', '1.5', '604801', '-5'])('rejects %s', (value) => {
-    vi.stubEnv('PROOF_PHOTO_URL_TTL_SECONDS', value);
-    expect(() => proofPhotoTtlSeconds()).toThrow('PROOF_PHOTO_URL_TTL_SECONDS');
-  });
+  it.each(['abc', '10', '1.5', '901', '3600', '604800', '-5'])(
+    'rejects %s',
+    (value) => {
+      vi.stubEnv('PROOF_PHOTO_URL_TTL_SECONDS', value);
+      expect(() => proofPhotoTtlSeconds()).toThrow(
+        'PROOF_PHOTO_URL_TTL_SECONDS',
+      );
+    },
+  );
 });
 
 describe('makeThumbnail', () => {
@@ -245,7 +250,7 @@ describe('proofPhotoUrl', () => {
       Bucket: 'uploads-bucket',
       Key: THUMBNAIL_KEY,
     });
-    expect(options).toEqual({ expiresIn: 3600 });
+    expect(options).toEqual({ expiresIn: 900 });
   });
 
   it('reuses an existing copy without reading the original', async () => {

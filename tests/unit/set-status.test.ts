@@ -127,6 +127,7 @@ describe('PATCH /tickets/{ticketId}/status', () => {
       expect(changeTicketStatus).toHaveBeenCalledWith(assigned, {
         to: 'IN_PROGRESS',
         accountId: 'acct_plumbing',
+        teamId: 'PLUMBING',
         now: expect.any(String),
       });
       expect(body(response)).toMatchObject({
@@ -178,6 +179,7 @@ describe('PATCH /tickets/{ticketId}/status', () => {
       expect(changeTicketStatus).toHaveBeenCalledWith(inProgress, {
         to: 'DONE',
         accountId: 'acct_plumbing',
+        teamId: 'PLUMBING',
         now: expect.any(String),
         proof: {
           photoId: 'proof_1',
@@ -284,24 +286,42 @@ describe('PATCH /tickets/{ticketId}/status', () => {
       expect(changeTicketStatus).not.toHaveBeenCalled();
     });
 
-    it('answers 403 to a manager', async () => {
+    it('answers 403 to a manager, before reading the ticket', async () => {
       const response = await handler(
         event(
           { status: 'IN_PROGRESS' },
           { accountId: 'acct_mgr', role: 'MANAGER', tokenVersion: 1 },
         ),
       );
+
       expect(response.statusCode).toBe(403);
+      expect(body(response).error.code).toBe('FORBIDDEN');
       expect(getTicket).not.toHaveBeenCalled();
+      expect(changeTicketStatus).not.toHaveBeenCalled();
     });
 
-    it('answers 403 to a technician of another team', async () => {
+    it('answers 403 to a technician of another team, as the staff UI expects', async () => {
       const response = await handler(
         event(
           { status: 'IN_PROGRESS' },
           { ...technician, accountId: 'acct_elec', teamId: 'ELECTRICAL' },
         ),
       );
+
+      expect(response.statusCode).toBe(403);
+      expect(body(response).error.code).toBe('FORBIDDEN');
+      expect(changeTicketStatus).not.toHaveBeenCalled();
+    });
+
+    it('answers 403 to a technician when the ticket has no team yet', async () => {
+      vi.mocked(getTicket).mockResolvedValue({
+        ...assigned,
+        status: 'RECEIVED',
+        teamId: undefined,
+      });
+
+      const response = await handler(event({ status: 'IN_PROGRESS' }));
+
       expect(response.statusCode).toBe(403);
     });
 

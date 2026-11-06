@@ -38,7 +38,7 @@ One item per staff account, PK `username` (trimmed, lower case). The staff login
 
 **Ticket id.** `tkt_` plus the first 26 hex characters of `sha256(lineUserId + "\n" + Idempotency-Key)`. A retry with the same key reaches the same item; two reporters using the same key never collide.
 
-**Create (`POST /tickets`).** One transaction writes the ticket (conditional on `attribute_not_exists(ticketId)`, so a duplicate id cancels everything), the reporter link, one `TicketPhotos` item per defect photo and a `TICKET_CREATED` event. The ticket starts as `RECEIVED`, `repairCycle` 1, `version` 1. The same payload replayed gets the original `201`; a different payload with the same key gets `409`.
+**Create (`POST /tickets`).** One transaction writes the ticket (conditional on `attribute_not_exists(ticketId)`, so a duplicate id cancels everything), the reporter link, one `TicketPhotos` item per defect photo and a `CREATED` event. The ticket starts as `RECEIVED`, `repairCycle` 1, `version` 1. The same payload replayed gets the original `201`; a different payload with the same key gets `409`.
 
 **Read.** `getTicket` reads the ticket and queries its photos, both strongly consistent, and returns one record with an embedded photo list. Callers never see storage attributes.
 
@@ -86,7 +86,7 @@ A wrong password counts one failure. A login for an unknown email, or for a disa
 - `IN_PROGRESS` puts the ticket in the team's `IN_PROGRESS` queue (`teamStatusKey`).
 - `DONE` needs `proofPhotoUploadId`: a `REPAIR_PROOF` upload at `uploads/REPAIR_PROOF/<accountId>/<uploadId>` of the calling account whose first bytes are a real image (SR-21), otherwise `422`. It removes the ticket from the open queue, sets `completedAt` (the SLA clock stops, SLA-11) and stores the photo in `TicketPhotos` with `repairCycle`.
 - Asking again for the status the ticket already has (for `DONE`, with the same photo) gets `200` with the ticket as it is, so a retry after a lost response does not fail.
-- The ticket update, the `STATUS_CHANGED` event and the proof photo are one transaction, conditional on the expected status and the `version` that was read, so when two requests race exactly one wins. The event records the calling account as `actorStaffId`.
+- The ticket update, the `STATUS_CHANGED` event and the proof photo are one transaction, conditional on the expected status and the `version` that was read, so when two requests race exactly one wins. The event records the calling account as `actorStaffId` and, for a technician, the team as `actorTeamId` (SR-11).
 
 | Status | When                                                                                  |
 | ------ | ------------------------------------------------------------------------------------- |
@@ -99,11 +99,11 @@ A wrong password counts one failure. A login for an unknown email, or for a disa
 
 **Audit events.** Every event id carries what keeps it unique: a ticket can go through the same step again after a reopen or a reassignment, and each time it gets a new event.
 
-| Kind             | Written by      | Event id                       | Extra fields                                             |
-| ---------------- | --------------- | ------------------------------ | -------------------------------------------------------- |
-| `TICKET_CREATED` | `POST /tickets` | `<ticketId>_created`           | `toStatus`                                               |
-| `TRIAGED`        | AI triage       | `<ticketId>_triaged`           | `fromStatus`, `toStatus`, `toPriority`, `toTeamId`       |
-| `STATUS_CHANGED` | status          | `<ticketId>_status_v<version>` | `fromStatus`, `toStatus`, `actorStaffId`, `proofPhotoId` |
+| Kind             | Written by      | Event id                       | Extra fields                                                            |
+| ---------------- | --------------- | ------------------------------ | ----------------------------------------------------------------------- |
+| `CREATED`        | `POST /tickets` | `<ticketId>_created`           | `toStatus`                                                              |
+| `TRIAGED`        | AI triage       | `<ticketId>_triaged`           | `fromStatus`, `toStatus`, `toPriority`, `toTeamId`                      |
+| `STATUS_CHANGED` | status          | `<ticketId>_status_v<version>` | `fromStatus`, `toStatus`, `actorStaffId`, `actorTeamId`, `proofPhotoId` |
 
 `<version>` is the version the ticket has after the change. The notification worker reads `toStatus` and `proofPhotoId` from the stream record.
 
@@ -111,7 +111,12 @@ A wrong password counts one failure. A login for an unknown email, or for a disa
 
 **Decisions and gaps**
 
-- A manager cannot change a status. The requirements document (RR-12) lets a manager override a status, but `openapi.yaml` says an override needs a separate exception policy, and the team follows `openapi.yaml`.
+- The audit event for a new ticket is named `CREATED`, not `TICKET_CREATED`, because the staff UI's history timeline shows `CREATED` as "Report received via LINE". The other two kinds in use (`TRIAGED`, `STATUS_CHANGED`) already match the staff UI.
+- The staff login takes `email`, as `openapi.yaml` and the staff UI do (the requirements document says `username`; the email is used as the `Accounts` key). The priority is named `CRITICAL`, as in `openapi.yaml` and the staff UI (the requirements document says `HIGH`); the AI's impact and urgency levels still use `HIGH`, `MEDIUM` and `LOW` and the matrix maps the top result to `CRITICAL`.
+- A manager cannot change a status. The requirements document (RR-12 and its permission matrix) lets a manager do it on any ticket, but `openapi.yaml` says an override needs a separate exception policy, and the team follows `openapi.yaml`. Confirm with the team if managers should be able to override.
+- A technician of another team gets `403`, not `404`. The staff UI expects `403` for another team's job (its README, steps 6 and 8), and the team follows the frontend here. The requirements document (SR-13) asks for `404` so that ticket ids cannot be probed; that is not followed on this endpoint.
+- `actorTeamId` is an addition to the `TicketEvent` schema of `openapi.yaml`, which has only `actorStaffId`. The access patterns document and SR-11 ask for the actor's team.
+- SR-11 also asks the staff portal to ask "who is working?" at login and keep the typed name in the audit event as an unverified label. That is not built: the login body of `openapi.yaml` has no such field.
 - Within one ticket a proof photo id can be stored only once (the photo write is conditional), but nothing stops the same upload from being attached to a different ticket. Single-use uploads (SR-21) need a registry that `POST /uploads` does not have yet.
 - `POST /tickets` still only checks that the defect upload exists; the image signature check of SR-21 is not applied there yet.
 - There is no accept step: the staff UI team proposed removing `POST /tickets/{ticketId}/accept`, `acceptedByStaffId` and `acceptedAt` because every technician of a team shares one account, and the team agreed. `openapi.yaml` still lists them until its owner removes them.
@@ -190,7 +195,7 @@ The deadline is counted from ticket creation, so slow triage uses up SLA time. T
 
 When AI triage assigns a ticket, the assigned team receives a plain-text work order email through Amazon SES.
 
-**Trigger.** The `TRIAGED` event (written in the same transaction as the triage update) starts the notification worker through the `TicketEvents` stream and sends the email. `TICKET_CREATED` does not send email; it sends the LINE receipt (see LINE messages below).
+**Trigger.** The `TRIAGED` event (written in the same transaction as the triage update) starts the notification worker through the `TicketEvents` stream and sends the email. `CREATED` does not send email; it sends the LINE receipt (see LINE messages below).
 
 **No duplicates.** The stream can deliver a record more than once, and the API contract says retries must not send duplicates. For each audit event, channel and recipient the worker checks the `Notifications` table, sends, then writes the record. The email has one recipient, the ticket's team, so its key looks like `tkt_1_triaged#EMAIL_TEAM:PLUMBING`:
 
@@ -235,7 +240,7 @@ The reporter gets Flex Messages in LINE, pushed by the same notification worker 
 
 | Audit event kind                           | Message                                                          | State                           |
 | ------------------------------------------ | ---------------------------------------------------------------- | ------------------------------- |
-| `TICKET_CREATED`                           | Receipt with the ticket id, location and time                    | Sent                            |
+| `CREATED`                                  | Receipt with the ticket id, location and time                    | Sent                            |
 | `TRIAGED`                                  | Assignment notice naming the team                                | Sent                            |
 | `STATUS_CHANGED`, `toStatus` `IN_PROGRESS` | Work started notice                                              | Sent                            |
 | `STATUS_CHANGED`, `toStatus` `DONE`        | Completion notice with the proof photo, View details and Re-open | Sent                            |
@@ -254,10 +259,10 @@ The reporter gets Flex Messages in LINE, pushed by the same notification worker 
 
 1. The technician uploads the original photo; it stays in S3 untouched as the record.
 2. When the `STATUS_CHANGED` event for `DONE` arrives, the worker finds the photo named by the event's `proofPhotoId`. If a small copy already exists it is reused, otherwise the worker reads the original (up to 25 MB), turns it upright by its EXIF orientation, fits it inside 1024 by 1024 pixels (never enlarging it, transparency on white) and saves a JPEG under 900 KB (quality 80, then 65, 50 and 35 until it fits) at `thumbnails/REPAIR_PROOF/<ticketId>/<photoId>.jpg`. Re-encoding drops the EXIF data, including any GPS position.
-3. The worker signs a short-lived read URL for the small copy (`PROOF_PHOTO_URL_TTL_SECONDS`, default 3600, from 60 to 604800) and puts it in the card.
+3. The worker signs a short-lived read URL for the small copy (`PROOF_PHOTO_URL_TTL_SECONDS`, default 900, from 60 to 900: SR-23 allows 15 minutes at most) and puts it in the card.
 4. If any step fails (a broken or unsupported file, a file over 25 MB, an S3 error, a link LINE would reject), the card is sent without a photo and the buttons still work. The reporter is told either way; the failure is logged.
 
-The signed URL expires sooner than the message stays in the chat, so an old card no longer shows the photo; the reporter taps "View details and photo" to see the full photo through the LIFF page. The ticket API still never returns a permanent photo URL or an S3 key.
+The signed URL expires after at most 15 minutes, far sooner than the message stays in the chat, so an old card no longer shows the photo; the reporter taps "View details and photo" to see the full photo through the LIFF page. The ticket API still never returns a permanent photo URL or an S3 key.
 
 Not verified on real AWS yet: a URL signed with a Lambda role's temporary credentials carries a long session token, and LINE accepts image URLs of at most 2000 characters. A longer URL is detected and the card goes out without the photo; if that happens in practice, sign with CloudFront signed URLs instead. Such a URL also stops working when the role's credentials expire, even if the lifetime is longer.
 

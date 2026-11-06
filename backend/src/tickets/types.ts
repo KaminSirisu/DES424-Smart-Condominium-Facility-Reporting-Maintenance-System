@@ -118,6 +118,8 @@ export interface TicketEventRecord {
   toTeamId?: string;
   /** The staff account that did it (openapi TicketEvent.actorStaffId). */
   actorStaffId?: string;
+  /** The team of the technician account that did it (SR-11); not set for a manager. */
+  actorTeamId?: string;
   /** The REPAIR_PROOF photo that allowed the DONE status. */
   proofPhotoId?: string;
   /** Why the change was made, when it was not an ordinary one (openapi TicketEvent.note). */
