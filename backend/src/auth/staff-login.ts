@@ -7,9 +7,9 @@ import {
   isLocked,
   recordFailedLogin,
   recordSuccessfulLogin,
-  toStaffProfile,
 } from '../shared/accounts.js';
 import { verifyPassword } from '../shared/password.js';
+import { staffProfileOf } from '../shared/staff-profile.js';
 import {
   signStaffToken,
   STAFF_TOKEN_MAX_SECONDS,
@@ -146,7 +146,7 @@ export async function handler(
     const response = json(200, {
       accessToken,
       expiresInSeconds: STAFF_TOKEN_MAX_SECONDS,
-      staff: toStaffProfile(account),
+      staff: await staffProfileOf(account),
     });
     return {
       ...response,

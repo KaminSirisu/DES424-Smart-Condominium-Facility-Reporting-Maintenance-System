@@ -6,16 +6,16 @@ What the backend code stores and reads today (SCFRMS-40, 41, 43, 45, 46, the SLA
 
 Each table name comes from an environment variable (`backend/src/shared/tables.ts`), so the infrastructure decides the real names.
 
-| Table             | Environment variable          | Keys and indexes                                                                                                   | Written by                                  |
-| ----------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------- |
-| `Tickets`         | `TICKETS_TABLE_NAME`          | PK `ticketId`; `TeamOpenIndex` (`teamStatusKey`, `createdKey`); `CreatedMonthIndex` (`createdMonth`, `createdKey`) | `POST /tickets`, AI triage, status endpoint |
-| `TicketReporters` | `TICKET_REPORTERS_TABLE_NAME` | PK `ticketId`, SK `reporterLineUserId`; `ReporterTicketsIndex` (`reporterLineUserId`, `associatedKey`)             | `POST /tickets`; read by the LINE channel   |
-| `TicketPhotos`    | `TICKET_PHOTOS_TABLE_NAME`    | PK `ticketId`, SK `photoId`                                                                                        | `POST /tickets`, status endpoint (`DONE`)   |
-| `TicketEvents`    | `TICKET_EVENTS_TABLE_NAME`    | PK `ticketId`, SK `eventKey` = `<occurredAt>#<eventId>`                                                            | `POST /tickets`, AI triage, status endpoint |
-| `Notifications`   | `NOTIFICATIONS_TABLE_NAME`    | PK `ticketId`, SK `notificationKey` = `<eventId>#<channel>:<recipient>`                                            | notification worker (proposal)              |
-| `RateLimits`      | `RATE_LIMITS_TABLE_NAME`      | PK `limitKey`, SK `windowStart` (number); TTL attribute `expiresAt`; no stream                                     | `POST /tickets` (proposal)                  |
-| `Teams`           | `TEAMS_TABLE_NAME`            | PK `teamId`; `email` is a proposed field                                                                           | read by the notification worker (proposal)  |
-| `Accounts`        | `ACCOUNTS_TABLE_NAME`         | PK normalized `username`                                                                                           | staff login (`shared/accounts.ts`)          |
+| Table             | Environment variable          | Keys and indexes                                                                                                   | Written by                                       |
+| ----------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
+| `Tickets`         | `TICKETS_TABLE_NAME`          | PK `ticketId`; `TeamOpenIndex` (`teamStatusKey`, `createdKey`); `CreatedMonthIndex` (`createdMonth`, `createdKey`) | `POST /tickets`, AI triage, status endpoint      |
+| `TicketReporters` | `TICKET_REPORTERS_TABLE_NAME` | PK `ticketId`, SK `reporterLineUserId`; `ReporterTicketsIndex` (`reporterLineUserId`, `associatedKey`)             | `POST /tickets`; read by the LINE channel        |
+| `TicketPhotos`    | `TICKET_PHOTOS_TABLE_NAME`    | PK `ticketId`, SK `photoId`                                                                                        | `POST /tickets`, status endpoint (`DONE`)        |
+| `TicketEvents`    | `TICKET_EVENTS_TABLE_NAME`    | PK `ticketId`, SK `eventKey` = `<occurredAt>#<eventId>`                                                            | `POST /tickets`, AI triage, status endpoint      |
+| `Notifications`   | `NOTIFICATIONS_TABLE_NAME`    | PK `ticketId`, SK `notificationKey` = `<eventId>#<channel>:<recipient>`                                            | notification worker (proposal)                   |
+| `RateLimits`      | `RATE_LIMITS_TABLE_NAME`      | PK `limitKey`, SK `windowStart` (number); TTL attribute `expiresAt`; no stream                                     | `POST /tickets` (proposal)                       |
+| `Teams`           | `TEAMS_TABLE_NAME`            | PK `teamId`; `email` and `name` are proposed fields                                                                | notification worker and staff profile (proposal) |
+| `Accounts`        | `ACCOUNTS_TABLE_NAME`         | PK normalized `username`                                                                                           | staff login (`shared/accounts.ts`)               |
 
 ## Accounts
 
@@ -79,7 +79,7 @@ A bad, expired or wrongly signed token is `401` with one generic message.
 
 **Account check on every request (SR-10).** A valid signature is not enough. `requireStaff()` in `backend/src/shared/staff-auth.ts` reads the account named by `account_id` and answers the same `401` unless the account exists, is active, and has the same `token_version`, role and team as the token. So disabling an account, resetting its password (raise `tokenVersion`) or changing its role or team stops its old tokens at once, not after 12 hours. The role and team the endpoint uses come from the account. The token's `account_id` is looked up as the `Accounts` key, so an account's `accountId` must be its normalized username (a proposal to the team, see Who needs to do what); the token check costs one strongly consistent read per request. A locked account (failed logins) can still use a token it already holds: the lock only stops new logins.
 
-**`POST /auth/staff/login`** (body `{ "email": "...", "password": "..." }`, handler `backend/src/auth/staff-login.ts`). The email, trimmed and lower-cased, is the key of the `Accounts` table. On success the answer is `200` with `{ accessToken, expiresInSeconds: 43200, staff: { id, name, role, teamId } }` and `Cache-Control: no-store`; `teamId` is left out for a manager. The success also stores `lastLoginAt` and clears the failure count.
+**`POST /auth/staff/login`** (body `{ "email": "...", "password": "..." }`, handler `backend/src/auth/staff-login.ts`). The email, trimmed and lower-cased, is the key of the `Accounts` table. On success the answer is `200` with `{ accessToken, expiresInSeconds: 43200, staff: { id, name, role, teamId, teamName } }` and `Cache-Control: no-store`; `teamId` is left out for a manager. The success also stores `lastLoginAt` and clears the failure count.
 
 | Status | When                                                                                                                                     |
 | ------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
@@ -89,7 +89,7 @@ A bad, expired or wrongly signed token is `401` with one generic message.
 
 A wrong password counts one failure. A login for an unknown email, or for a disabled account with the right password, counts nothing. A check against an unknown email does the same bcrypt work as a real one. Known limits: the lock exists only for real accounts, so a client that hits `429` after five tries learns that the email exists (the per-IP limit of SR-09, an AWS WAF rule on API Gateway, slows this down but is not code); and there is no manager MFA yet (SR-09).
 
-**`GET /auth/staff/me`** (handler `backend/src/auth/staff-me.ts`). Returns `{ id, name, role, teamId }` (`StaffProfile`) read from the current account, so a changed display name shows at once; `teamId` is left out for a manager. `401` for a missing or bad token, a disabled account or an old `token_version`. The profile has no `teamName`: the staff UI asked for one, which needs a `name` field on the `Teams` table first.
+**`GET /auth/staff/me`** (handler `backend/src/auth/staff-me.ts`). Returns `{ id, name, role, teamId, teamName }` (`StaffProfile`) read from the current account, so a changed display name shows at once; `teamId` and `teamName` are left out for a manager. `teamName` is the `name` of the team's item in the `Teams` table (the staff UI header shows it). It is also left out when `TEAMS_TABLE_NAME` is not set, the team has no `name`, or the lookup fails (logged with the team id only; it never blocks `/me` or the login). `401` for a missing or bad token, a disabled account or an old `token_version`.
 
 **`PATCH /tickets/{ticketId}/status`** (body `{ "status": "IN_PROGRESS" | "DONE", "proofPhotoUploadId": "..." }`). Any `TECHNICIAN` of the ticket's team may do it; a manager or a technician of another team gets `403`. The allowed moves are `ASSIGNED` to `IN_PROGRESS` and `IN_PROGRESS` to `DONE`; anything else is `409`.
 

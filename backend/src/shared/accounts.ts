@@ -49,6 +49,8 @@ export interface StaffProfile {
   role: StaffRole;
   /** Present for a TECHNICIAN only. */
   teamId?: string;
+  /** The team's display name, when the Teams table has one. */
+  teamName?: string;
 }
 
 export function toStaffProfile(account: AccountRecord): StaffProfile {

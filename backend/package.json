@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node --env-file-if-exists=../../.env --import tsx src/local.ts",
+    "dev": "node --env-file-if-exists=../.env --import tsx src/local.ts",
     "seed:accounts": "node --env-file-if-exists=../.env --import tsx src/scripts/seed-accounts.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json"

@@ -12,6 +12,8 @@ vi.mock('../../backend/src/shared/accounts', async (importOriginal) => ({
   recordSuccessfulLogin: vi.fn(),
 }));
 
+vi.mock('../../backend/src/shared/teams', () => ({ getTeamName: vi.fn() }));
+
 import { handler } from '../../backend/src/auth/staff-login';
 import {
   getAccountByUsername,
@@ -19,6 +21,7 @@ import {
   recordSuccessfulLogin,
 } from '../../backend/src/shared/accounts';
 import { verifyStaffToken } from '../../backend/src/shared/staff-token';
+import { getTeamName } from '../../backend/src/shared/teams';
 
 const PASSWORD = 'Correct-Horse-Battery-9';
 // Cost 4 keeps the tests fast; verifyPassword accepts any bcrypt cost.
@@ -107,6 +110,16 @@ describe('POST /auth/staff/login', () => {
         teamId: 'PLUMBING',
         tokenVersion: 3,
       });
+    });
+
+    it('adds the team name, and a Teams failure does not stop the login', async () => {
+      vi.mocked(getTeamName).mockResolvedValue('Plumbing');
+      expect(bodyOf(await login()).staff.teamName).toBe('Plumbing');
+
+      vi.mocked(getTeamName).mockRejectedValue(new Error('throttled'));
+      const result = await login();
+      expect(result.statusCode).toBe(200);
+      expect(bodyOf(result).staff).not.toHaveProperty('teamName');
     });
 
     it('returns a manager without a team', async () => {

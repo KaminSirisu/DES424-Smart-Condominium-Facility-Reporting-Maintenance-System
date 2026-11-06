@@ -4,7 +4,8 @@ import { tableName } from './tables.js';
 
 /**
  * Reads maintenance team records from the Teams table (SCFRMS-28):
- * PK `teamId`, with `email` (the team's work order inbox) added by SCFRMS-46.
+ * PK `teamId`, with `email` (the team's work order inbox) added by SCFRMS-46
+ * and `name` (shown in the staff UI header, from the staff UI's request).
  */
 
 /**
@@ -21,4 +22,19 @@ export async function getTeamEmail(teamId: string): Promise<string | null> {
   );
   const email: unknown = result.Item?.email;
   return typeof email === 'string' && email.includes('@') ? email : null;
+}
+
+/**
+ * The display name stored for a team, or null if the team has no record or no
+ * name. While TEAMS_TABLE_NAME is not set this returns null without calling
+ * DynamoDB.
+ */
+export async function getTeamName(teamId: string): Promise<string | null> {
+  if (!process.env.TEAMS_TABLE_NAME) return null;
+
+  const result = await ddb.send(
+    new GetCommand({ TableName: tableName('TEAMS'), Key: { teamId } }),
+  );
+  const name: unknown = result.Item?.name;
+  return typeof name === 'string' && name.trim() !== '' ? name.trim() : null;
 }

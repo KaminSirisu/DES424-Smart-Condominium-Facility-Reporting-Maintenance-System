@@ -9,9 +9,12 @@ vi.mock('../../backend/src/shared/accounts', async (importOriginal) => ({
   getAccountByUsername: vi.fn(),
 }));
 
+vi.mock('../../backend/src/shared/teams', () => ({ getTeamName: vi.fn() }));
+
 import { handler } from '../../backend/src/auth/staff-me';
 import { getAccountByUsername } from '../../backend/src/shared/accounts';
 import { signStaffToken } from '../../backend/src/shared/staff-token';
+import { getTeamName } from '../../backend/src/shared/teams';
 
 const account: AccountRecord = {
   accountId: 'plumbing@example.com',
@@ -70,6 +73,29 @@ describe('GET /auth/staff/me', () => {
     });
     expect(result.body).not.toContain('secret-hash');
     expect(result.body).not.toContain('lockedUntil');
+  });
+
+  it('adds the team name from the Teams table', async () => {
+    vi.mocked(getTeamName).mockResolvedValue('Plumbing');
+
+    const result = await handler(event(`Bearer ${token()}`));
+
+    expect(JSON.parse(result.body ?? '')).toEqual({
+      id: 'plumbing@example.com',
+      name: 'Plumbing team',
+      role: 'TECHNICIAN',
+      teamId: 'PLUMBING',
+      teamName: 'Plumbing',
+    });
+  });
+
+  it('still answers 200, without a team name, when the Teams table fails', async () => {
+    vi.mocked(getTeamName).mockRejectedValue(new Error('throttled'));
+
+    const result = await handler(event(`Bearer ${token()}`));
+
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body ?? '')).not.toHaveProperty('teamName');
   });
 
   it('shows a display name changed after the token was issued', async () => {

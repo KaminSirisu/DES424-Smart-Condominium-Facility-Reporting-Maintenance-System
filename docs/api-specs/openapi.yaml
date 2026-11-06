@@ -894,3 +894,6 @@ components:
         name: { type: string }
         role: { type: string, enum: [TECHNICIAN, MANAGER] }
         teamId: { type: string }
+        teamName:
+          type: string
+          description: Display name of the team; present for a technician when the team has one.
