@@ -15,7 +15,7 @@ vi.mock('../../backend/src/notifications/work-order-email', () => ({
 vi.mock('../../backend/src/notifications/line-notification', () => ({
   lineReporterChannel: {
     name: 'LINE_REPORTER',
-    kinds: ['CREATED', 'TRIAGED'],
+    kinds: ['CREATED', 'TRIAGED', 'MERGED'],
     recipients: vi.fn(),
     send: vi.fn(),
   },
@@ -136,6 +136,25 @@ describe('notification stream handler', () => {
         eventId: 'tkt_1_created',
       }),
     );
+  });
+
+  it('sends only the LINE merge notice when a ticket is merged into another', async () => {
+    await handler(eventOf(record('MERGED', '1')));
+
+    expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).toHaveBeenCalledTimes(2);
+    expect(lineSend).toHaveBeenCalledWith(
+      ticket(),
+      'Uaaa',
+      expect.objectContaining({ kind: 'MERGED', eventId: 'tkt_1_merged' }),
+    );
+  });
+
+  it('sends nothing for the event written on the ticket that took the merge', async () => {
+    await handler(eventOf(record('DUPLICATES_MERGED', '1')));
+
+    expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).not.toHaveBeenCalled();
   });
 
   it.each([

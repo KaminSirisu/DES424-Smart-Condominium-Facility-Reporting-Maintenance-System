@@ -408,3 +408,176 @@ export async function changeTicketStatus(
     }),
   );
 }
+
+/** DynamoDB allows at most 100 items in one transaction. */
+export const MAX_TRANSACTION_ITEMS = 100;
+
+export interface MergeChange {
+  /** The technician account that merges; recorded as the actor of the events. */
+  accountId: string;
+  /** Its team (SR-11). */
+  teamId: string;
+  now: string;
+  /** Reporters of the sources that the canonical ticket does not have yet. */
+  reporters: { lineUserId: string; sourceTicketId: string }[];
+  /** The canonical ticket's new priority and deadline, only when the merge changes them (SLA-09). */
+  priority?: Priority;
+  deadlineAt?: string;
+}
+
+/** How many items one merge writes: the tickets and their events, plus a reporter link each. */
+export function mergeItemCount(
+  sourceCount: number,
+  reporterCount: number,
+): number {
+  return 2 + 2 * sourceCount + reporterCount;
+}
+
+/**
+ * Merges duplicate tickets into a canonical ticket, all-or-nothing:
+ *
+ *  - every source becomes MERGED, points at the canonical ticket
+ *    (`mergedIntoTicketId`) and leaves the team's open queue; its own report,
+ *    photos, reporters and history stay as they were;
+ *  - every reporter of the sources that the canonical ticket lacks is linked to
+ *    it (`sourceTicketId` records where from), so they all can see it and are
+ *    told about it;
+ *  - the canonical ticket may get a higher priority and a new deadline;
+ *  - a MERGED event is written on each source and a DUPLICATES_MERGED event on
+ *    the canonical ticket.
+ *
+ * The canonical ticket and each source are updated only if they still are in
+ * the status and at the version that were read; otherwise this fails with
+ * TransactionCanceledException (reason ConditionalCheckFailed), and nothing
+ * changes.
+ */
+export async function mergeTickets(
+  canonical: TicketRecord,
+  sources: TicketRecord[],
+  change: MergeChange,
+): Promise<void> {
+  if (sources.length === 0) throw new Error('A merge needs a source ticket.');
+  if (
+    mergeItemCount(sources.length, change.reporters.length) >
+    MAX_TRANSACTION_ITEMS
+  ) {
+    throw new Error('A merge this large does not fit in one transaction.');
+  }
+
+  const actor = {
+    actorType: 'STAFF' as const,
+    actorStaffId: change.accountId,
+    actorTeamId: change.teamId,
+  };
+  const canonicalEvent: TicketEventRecord = {
+    id: `${canonical.id}_duplicates_merged_v${canonical.version + 1}`,
+    ticketId: canonical.id,
+    kind: 'DUPLICATES_MERGED',
+    occurredAt: change.now,
+    ...actor,
+    ...(change.priority ? { toPriority: change.priority } : {}),
+    repairCycle: canonical.repairCycle,
+    note:
+      `Merged in ${sources.map((s) => `#${s.id}`).join(', ')}` +
+      (change.priority ? `; priority raised to ${change.priority}` : ''),
+  };
+
+  const canonicalValues: Record<string, unknown> = {
+    ':status': canonical.status,
+    ':version': canonical.version,
+    ':one': 1,
+    ':now': change.now,
+  };
+  let canonicalUpdate = 'SET updatedAt = :now, #version = #version + :one';
+  if (change.priority) {
+    canonicalUpdate += ', priority = :priority';
+    canonicalValues[':priority'] = change.priority;
+  }
+  if (change.deadlineAt) {
+    canonicalUpdate += ', deadlineAt = :deadlineAt';
+    canonicalValues[':deadlineAt'] = change.deadlineAt;
+  }
+
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: tableName('TICKETS'),
+            Key: { ticketId: canonical.id },
+            ConditionExpression: '#status = :status AND #version = :version',
+            UpdateExpression: canonicalUpdate,
+            ExpressionAttributeNames: {
+              '#status': 'status',
+              '#version': 'version',
+            },
+            ExpressionAttributeValues: canonicalValues,
+          },
+        },
+        {
+          Put: {
+            TableName: tableName('TICKET_EVENTS'),
+            Item: toEventItem(canonicalEvent),
+          },
+        },
+        ...sources.flatMap((source) => {
+          const event: TicketEventRecord = {
+            id: `${source.id}_merged`,
+            ticketId: source.id,
+            kind: 'MERGED',
+            occurredAt: change.now,
+            ...actor,
+            fromStatus: source.status,
+            toStatus: 'MERGED',
+            repairCycle: source.repairCycle,
+            note: `Merged into #${canonical.id}`,
+          };
+          return [
+            {
+              Update: {
+                TableName: tableName('TICKETS'),
+                Key: { ticketId: source.id },
+                ConditionExpression: '#status = :from AND #version = :version',
+                UpdateExpression:
+                  'SET #status = :merged, mergedIntoTicketId = :canonical, ' +
+                  'updatedAt = :now, #version = #version + :one ' +
+                  'REMOVE teamStatusKey',
+                ExpressionAttributeNames: {
+                  '#status': 'status',
+                  '#version': 'version',
+                },
+                ExpressionAttributeValues: {
+                  ':from': source.status,
+                  ':version': source.version,
+                  ':merged': 'MERGED',
+                  ':canonical': canonical.id,
+                  ':now': change.now,
+                  ':one': 1,
+                },
+              },
+            },
+            {
+              Put: {
+                TableName: tableName('TICKET_EVENTS'),
+                Item: toEventItem(event),
+              },
+            },
+          ];
+        }),
+        ...change.reporters.map((reporter) => ({
+          Put: {
+            TableName: tableName('TICKET_REPORTERS'),
+            Item: {
+              ticketId: canonical.id,
+              reporterLineUserId: reporter.lineUserId,
+              associatedAt: change.now,
+              associatedKey: timeKey(change.now, canonical.id),
+              sourceTicketId: reporter.sourceTicketId,
+            },
+            ConditionExpression: 'attribute_not_exists(reporterLineUserId)',
+          },
+        })),
+      ],
+    }),
+  );
+}

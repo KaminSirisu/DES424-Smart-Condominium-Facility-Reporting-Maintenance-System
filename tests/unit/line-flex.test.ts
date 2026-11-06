@@ -5,6 +5,7 @@ import {
   EMERGENCY_NUMBERS,
   buildAssignedMessage,
   buildCompletedMessage,
+  buildMergedMessage,
   buildReceiptMessage,
   buildStartedMessage,
   cleanText,
@@ -269,6 +270,51 @@ describe('completed message', () => {
       buildCompletedMessage(ticket({ id: 'tkt a/b' }), { liffUrl: LIFF }),
     ).map((a) => a.uri);
     expect(uris[0]).toBe(`${LIFF}/tickets/tkt%20a%2Fb`);
+  });
+});
+
+describe('buildMergedMessage', () => {
+  const merged = () =>
+    ticket({
+      id: 'tkt_dup1',
+      status: 'MERGED',
+      mergedIntoTicketId: 'tkt_main',
+    });
+
+  it('tells the reporter which ticket the report was merged into', () => {
+    const message = buildMergedMessage(merged(), { liffUrl: LIFF });
+
+    expect(message?.altText).toBe(
+      'Your report tkt_dup1 was merged into tkt_main',
+    );
+    const text = allText(message).join(' ');
+    expect(text).toContain('tkt_dup1');
+    expect(text).toContain('tkt_main');
+    expect(text).toContain('Beside the lobby elevator');
+  });
+
+  it('opens the ticket it was merged into', () => {
+    const json = JSON.stringify(
+      buildMergedMessage(merged(), { liffUrl: LIFF }),
+    );
+
+    expect(json).toContain(`${LIFF}/tickets/tkt_main`);
+    expect(json).not.toContain(`${LIFF}/tickets/tkt_dup1`);
+  });
+
+  it('leaves the button out without a LIFF url', () => {
+    expect(JSON.stringify(buildMergedMessage(merged()))).not.toContain('"uri"');
+  });
+
+  it('sends nothing for a ticket that was not merged', () => {
+    expect(buildMergedMessage(ticket())).toBeNull();
+  });
+
+  it('shows no staff names or internal ids (RR-04)', () => {
+    const text = JSON.stringify(
+      buildMergedMessage({ ...merged(), reporterLineUserId: 'Usecret' }),
+    );
+    expect(text).not.toContain('Usecret');
   });
 });
 

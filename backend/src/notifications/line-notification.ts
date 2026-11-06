@@ -5,6 +5,7 @@ import type { NotificationChannel, NotificationEvent } from './channel.js';
 import {
   buildAssignedMessage,
   buildCompletedMessage,
+  buildMergedMessage,
   buildReceiptMessage,
   buildStartedMessage,
   type FlexOptions,
@@ -21,17 +22,24 @@ import {
  * LINE channel (SCFRMS-45): sends a Flex Message to every reporter of the
  * ticket. CREATED sends the receipt; TRIAGED sends the assignment
  * notice; STATUS_CHANGED sends the work started notice (toStatus IN_PROGRESS)
- * or the completion notice (toStatus DONE, SCFRMS-43). The completion notice
- * shows the repair photo as a small copy with a signed URL (see
- * shared/proof-photo.ts); if that cannot be made the notice is sent without
- * the photo, because telling the reporter matters more than the picture.
+ * or the completion notice (toStatus DONE, SCFRMS-43); MERGED, written on a
+ * ticket that was merged into another, tells that ticket's reporters
+ * (SCFRMS-44). The completion notice shows the repair photo as a small copy
+ * with a signed URL (see shared/proof-photo.ts); if that cannot be made the
+ * notice is sent without the photo, because telling the reporter matters more
+ * than the picture.
  *
  * Environment: BUILDING_SECURITY_PHONE (shown on the receipt) and LIFF_URL
  * (the https://liff.line.me/<liffId> link that the buttons open); both are
  * optional. The channel access token is read in line-messenger.ts.
  */
 
-export const LINE_KINDS = ['CREATED', 'TRIAGED', 'STATUS_CHANGED'] as const;
+export const LINE_KINDS = [
+  'CREATED',
+  'TRIAGED',
+  'STATUS_CHANGED',
+  'MERGED',
+] as const;
 
 export function flexOptionsFromEnv(): FlexOptions {
   return {
@@ -49,6 +57,7 @@ function messageFor(
     return buildReceiptMessage(ticket, options);
   }
   if (event.kind === 'TRIAGED') return buildAssignedMessage(ticket, options);
+  if (event.kind === 'MERGED') return buildMergedMessage(ticket, options);
   if (event.kind === 'STATUS_CHANGED') {
     if (event.toStatus === 'IN_PROGRESS') {
       return buildStartedMessage(ticket, options);

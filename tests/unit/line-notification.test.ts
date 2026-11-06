@@ -57,7 +57,7 @@ describe('LINE reporter channel', () => {
     vi.restoreAllMocks();
   });
 
-  it('is triggered by the receipt, assignment and status events', () => {
+  it('is triggered by the receipt, assignment, status and merge events', () => {
     const { channel } = setup();
     expect(channel.name).toBe('LINE_REPORTER');
     expect(channel.kinds).toEqual(LINE_KINDS);
@@ -65,6 +65,7 @@ describe('LINE reporter channel', () => {
       'CREATED',
       'TRIAGED',
       'STATUS_CHANGED',
+      'MERGED',
     ]);
   });
 
@@ -90,6 +91,36 @@ describe('LINE reporter channel', () => {
     expect(messages[0].altText).toContain('Report received');
     expect(JSON.stringify(messages[0])).toContain('021234567');
     expect(retryKey).toBe(retryKeyFor('tkt_1_created', 'Ubbb'));
+  });
+
+  it('tells the reporters of a merged ticket which ticket it was merged into', async () => {
+    const { channel, push } = setup();
+    const merged = ticket({
+      id: 'tkt_dup1',
+      status: 'MERGED',
+      mergedIntoTicketId: 'tkt_main',
+    });
+
+    await expect(
+      channel.send(merged, 'Ubbb', {
+        ...event('MERGED'),
+        ticketId: 'tkt_dup1',
+      }),
+    ).resolves.toBe(true);
+
+    const [to, messages] = push.mock.calls[0];
+    expect(to).toBe('Ubbb');
+    expect(messages[0].altText).toContain('tkt_main');
+    expect(JSON.stringify(messages[0])).toContain('/tickets/tkt_main');
+  });
+
+  it('sends nothing for a MERGED event on a ticket that points nowhere', async () => {
+    const { channel, push } = setup();
+
+    await expect(channel.send(ticket(), 'Ubbb', event('MERGED'))).resolves.toBe(
+      false,
+    );
+    expect(push).not.toHaveBeenCalled();
   });
 
   it('sends the assignment notice for a triaged ticket', async () => {

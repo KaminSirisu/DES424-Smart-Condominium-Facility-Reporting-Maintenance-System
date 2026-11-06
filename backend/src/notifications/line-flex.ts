@@ -5,9 +5,10 @@ import { formatBangkok } from './work-order-email.js';
 
 /**
  * LINE Flex Messages for the reporter (SCFRMS-45): the receipt, the
- * assignment notice, the work-started notice and the completion notice with a
- * Re-open button. The builders are pure functions; the caller passes the
- * building security number and the LIFF app URL.
+ * assignment notice, the work-started notice, the completion notice with a
+ * Re-open button and the merge notice (SCFRMS-44). The builders are pure
+ * functions; the caller passes the building security number and the LIFF app
+ * URL.
  *
  * Rules from the Security, Roles & SLA requirements:
  *  - SLA-02: the receipt shows building security's number and the Thai
@@ -264,6 +265,37 @@ export function buildStartedMessage(
     [
       text(`The ${label} team has started work on your report.`),
       row('Ticket', ticket.id),
+      row('Location', cleanText(ticket.location, MAX_LOCATION_LENGTH)),
+    ],
+    footer,
+  );
+}
+
+/**
+ * Sent to the reporters of a ticket that a technician merged into another
+ * report of the same problem (RR-02). `ticket` is the merged ticket; the link
+ * opens the ticket it was merged into, which its reporters are linked to.
+ */
+export function buildMergedMessage(
+  ticket: TicketRecord,
+  options: FlexOptions = {},
+): LineMessage | null {
+  const into = ticket.mergedIntoTicketId;
+  if (!into) return null;
+
+  const footer: FlexComponent[] = [];
+  const details = ticketUrl(options.liffUrl, into);
+  if (details) footer.push(button('View report', details));
+
+  return bubble(
+    `Your report ${ticket.id} was merged into ${into}`,
+    'Report merged',
+    [
+      text(
+        'A technician found that another report describes the same problem and merged yours into it. You will get updates on that report.',
+      ),
+      row('Your ticket', ticket.id),
+      row('Now tracked as', into),
       row('Location', cleanText(ticket.location, MAX_LOCATION_LENGTH)),
     ],
     footer,
