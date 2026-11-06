@@ -254,32 +254,6 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /tickets/{ticketId}/accept:
-    parameters:
-      - $ref: '#/components/parameters/TicketId'
-    post:
-      tags: [Tickets]
-      summary: Accept an assigned team ticket as a technician
-      description: >-
-        Only a technician on the assigned team may accept an ASSIGNED ticket.
-        Acceptance records acceptedByStaffId and acceptedAt without changing
-        status. A ticket already accepted by another technician conflicts.
-      operationId: acceptTicket
-      security:
-        - staffToken: []
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-      responses:
-        '200':
-          description: Ticket accepted and audited.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Ticket'
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
   /tickets/{ticketId}/assignment:
     parameters:
       - $ref: '#/components/parameters/TicketId'
@@ -287,9 +261,8 @@ paths:
       tags: [Tickets]
       summary: Reassign an unstarted ticket to another team
       description: >-
-        Manager only. Reassignment is allowed while ASSIGNED, including after
-        technician acceptance but before work starts. It clears the prior
-        acceptance and records the old team, new team, actor, reason, and time.
+        Manager only. Reassignment is allowed while ASSIGNED, before work
+        starts. It records the old team, new team, actor, reason, and time.
         Reassigning IN_PROGRESS work needs a separate exception policy.
       operationId: reassignTicket
       security:
@@ -320,8 +293,9 @@ paths:
       tags: [Tickets]
       summary: Start or finish repair work
       description: >-
-        An accepting technician on the assigned team moves ASSIGNED ->
-        IN_PROGRESS -> DONE. DONE requires a verified REPAIR_PROOF upload.
+        A technician on the assigned team moves ASSIGNED -> IN_PROGRESS ->
+        DONE. Acceptance is by team, not by person: every technician of a team
+        shares one account. DONE requires a verified REPAIR_PROOF upload.
         Completion queues a reporter notification. A manager status override,
         if needed, requires a separate exception policy.
       operationId: setTicketStatus
@@ -651,12 +625,6 @@ components:
             Who decided priority: AI for the automatic triage, STAFF after a
             technician or manager changes it.
         teamId: { type: string }
-        acceptedByStaffId:
-          type: string
-          description: >-
-            Staff-visible only; present after a technician accepts the current
-            assignment.
-        acceptedAt: { type: string, format: date-time }
         photos:
           type: array
           description: >-
@@ -787,10 +755,17 @@ components:
       properties:
         id: { type: string }
         ticketId: { type: string }
-        kind: { type: string }
+        kind:
+          type: string
+          description: >-
+            Written so far: CREATED, TRIAGED and STATUS_CHANGED. STATUS_CHANGED
+            carries fromStatus and toStatus.
         occurredAt: { type: string, format: date-time }
         actorType: { type: string, enum: [REPORTER, STAFF, SYSTEM] }
         actorStaffId: { type: string }
+        actorTeamId:
+          type: string
+          description: Team of the technician account that acted; not set for a manager.
         fromStatus: { $ref: '#/components/schemas/TicketStatus' }
         toStatus: { $ref: '#/components/schemas/TicketStatus' }
         fromPriority: { $ref: '#/components/schemas/Priority' }

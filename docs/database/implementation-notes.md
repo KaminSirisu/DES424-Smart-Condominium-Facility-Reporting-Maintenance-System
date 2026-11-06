@@ -125,11 +125,11 @@ A wrong password counts one failure. A login for an unknown email, or for a disa
 - The staff login takes `email`, as `openapi.yaml` and the staff UI do (the requirements document says `username`; the email is used as the `Accounts` key). The priority is named `CRITICAL`, as in `openapi.yaml` and the staff UI (the requirements document says `HIGH`); the AI's impact and urgency levels still use `HIGH`, `MEDIUM` and `LOW` and the matrix maps the top result to `CRITICAL`.
 - A manager cannot change a status. The requirements document (RR-12 and its permission matrix) lets a manager do it on any ticket, but `openapi.yaml` says an override needs a separate exception policy, and the team follows `openapi.yaml`. Confirm with the team if managers should be able to override.
 - A technician of another team gets `403`, not `404`. The staff UI expects `403` for another team's job (its README, steps 6 and 8), and the team follows the frontend here. The requirements document (SR-13) asks for `404` so that ticket ids cannot be probed; that is not followed on this endpoint.
-- `actorTeamId` is an addition to the `TicketEvent` schema of `openapi.yaml`, which has only `actorStaffId`. The access patterns document and SR-11 ask for the actor's team.
+- `actorTeamId` is a field of the `TicketEvent` schema in `openapi.yaml`, next to `actorStaffId`. The access patterns document and SR-11 ask for the actor's team.
 - SR-11 also asks the staff portal to ask "who is working?" at login and keep the typed name in the audit event as an unverified label. That is not built: the login body of `openapi.yaml` has no such field.
 - Within one ticket a proof photo id can be stored only once (the photo write is conditional), but nothing stops the same upload from being attached to a different ticket. Single-use uploads (SR-21) need a registry that `POST /uploads` does not have yet.
 - `POST /tickets` still only checks that the defect upload exists; the image signature check of SR-21 is not applied there yet.
-- There is no accept step: the staff UI team proposed removing `POST /tickets/{ticketId}/accept`, `acceptedByStaffId` and `acceptedAt` because every technician of a team shares one account, and the team agreed. `openapi.yaml` still lists them until its owner removes them.
+- There is no accept step: the staff UI team proposed removing `POST /tickets/{ticketId}/accept`, `acceptedByStaffId` and `acceptedAt` because every technician of a team shares one account, and the team agreed. They are removed from `openapi.yaml`.
 - The reopen endpoint, the photo access endpoint and the staff login are not built (see Who needs to do what).
 
 ## Rate limit (SR-31, proposal)
