@@ -357,14 +357,20 @@ paths:
       tags: [Tickets]
       summary: Merge duplicate tickets into this ticket as a technician
       description: >-
-        An authorized technician confirms the same physical problem after
-        reviewing the reported free-text locations and issue details; matching
-        location text alone does not establish a duplicate. The technician must
-        have access to the canonical and source tickets; cross-team merge rules
-        still need approval. Source tickets become MERGED and point to this
+        A technician of the assigned team confirms the same physical problem
+        after reviewing the reported free-text locations and issue details;
+        matching location text alone does not establish a duplicate. The
+        canonical ticket and every source must belong to the technician's team
+        (403 otherwise; a manager cannot merge) and be ASSIGNED or IN_PROGRESS
+        (409 otherwise). Source tickets become MERGED and point to this
         canonical ticket. Their original reports, photos, and audit history
         remain on those records. All source reporter associations are retained
-        on the canonical ticket.
+        on the canonical ticket, and each source's reporters are notified. The
+        canonical ticket takes the highest priority of the merged tickets and a
+        deadline counted from the earliest creation time. At most 10 sources;
+        422 for an unknown source, a ticket merged into itself, or too many
+        sources or reporters. Repeating a merge that already happened returns
+        200.
       operationId: mergeTickets
       security:
         - staffToken: []
@@ -743,6 +749,7 @@ components:
         sourceTicketIds:
           type: array
           minItems: 1
+          maxItems: 10
           uniqueItems: true
           items: { type: string }
     TicketEvent:
@@ -758,8 +765,9 @@ components:
         kind:
           type: string
           description: >-
-            Written so far: CREATED, TRIAGED and STATUS_CHANGED. STATUS_CHANGED
-            carries fromStatus and toStatus.
+            Written so far: CREATED, TRIAGED, STATUS_CHANGED, MERGED (on a
+            merged source) and DUPLICATES_MERGED (on the canonical ticket).
+            STATUS_CHANGED and MERGED carry fromStatus and toStatus.
         occurredAt: { type: string, format: date-time }
         actorType: { type: string, enum: [REPORTER, STAFF, SYSTEM] }
         actorStaffId: { type: string }
