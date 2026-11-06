@@ -1,4 +1,4 @@
-import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { isTeamId } from '../triage/policy.js';
 import { ddb } from './dynamodb-client.js';
 import type { StaffRole } from './staff-token.js';
@@ -241,4 +241,62 @@ export async function recordSuccessfulLogin(
       ExpressionAttributeValues: { ':now': nowIso, ':zero': 0 },
     }),
   );
+}
+
+export interface NewAccount {
+  /** Becomes the key (normalized) and the `accountId`. */
+  username: string;
+  role: StaffRole;
+  /** Required for a TECHNICIAN, not allowed for a MANAGER. */
+  teamId?: string;
+  displayName: string;
+  /** Already hashed (shared/password.ts); a plain password is never stored. */
+  passwordHash: string;
+}
+
+/**
+ * Adds an account (SR-07: there is no self sign-up; the seed script uses
+ * this until the manager endpoints exist). The item is checked with the same
+ * rules the reader applies, so nothing unreadable is stored. An existing
+ * account is never overwritten: that is the answer `'exists'`.
+ */
+export async function createAccount(
+  account: NewAccount,
+  now: Date = new Date(),
+): Promise<'created' | 'exists'> {
+  const username = normalizeUsername(account.username);
+  if (!username.includes('@')) {
+    throw new Error('An account username must be an email address.');
+  }
+  const nowIso = now.toISOString();
+  const item = {
+    username,
+    accountId: username,
+    role: account.role,
+    ...(account.teamId === undefined ? {} : { teamId: account.teamId }),
+    displayName: account.displayName,
+    passwordHash: account.passwordHash,
+    isActive: true,
+    tokenVersion: 0,
+    failedLoginCount: 0,
+    passwordChangedAt: nowIso,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+  toAccount(item);
+
+  try {
+    await ddb.send(
+      new PutCommand({
+        TableName: tableName('ACCOUNTS'),
+        Item: item,
+        ConditionExpression: 'attribute_not_exists(#username)',
+        ExpressionAttributeNames: { '#username': 'username' },
+      }),
+    );
+    return 'created';
+  } catch (err) {
+    if (isConditionalCheckFailure(err)) return 'exists';
+    throw err;
+  }
 }

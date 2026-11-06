@@ -5,6 +5,7 @@ vi.mock('../../backend/src/shared/dynamodb-client.js', () => ({
 }));
 
 import {
+  createAccount,
   getAccountByUsername,
   isLocked,
   LOCK_MINUTES,
@@ -273,5 +274,85 @@ describe('toStaffProfile', () => {
     });
     expect(profile).not.toHaveProperty('teamId');
     expect(JSON.stringify(profile)).not.toContain('hash');
+  });
+});
+
+describe('createAccount', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.stubEnv('ACCOUNTS_TABLE_NAME', 'TestAccounts');
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  const technician = {
+    username: ' Plumbing@Example.com ',
+    role: 'TECHNICIAN' as const,
+    teamId: 'PLUMBING',
+    displayName: 'Plumbing team',
+    passwordHash: '$2b$12$hash',
+  };
+
+  it('stores an active account with the username as its id, only if it is new', async () => {
+    send.mockResolvedValue({});
+
+    await expect(createAccount(technician, NOW)).resolves.toBe('created');
+
+    expect(send.mock.calls[0][0].input).toEqual({
+      TableName: 'TestAccounts',
+      Item: {
+        username: 'plumbing@example.com',
+        accountId: 'plumbing@example.com',
+        role: 'TECHNICIAN',
+        teamId: 'PLUMBING',
+        displayName: 'Plumbing team',
+        passwordHash: '$2b$12$hash',
+        isActive: true,
+        tokenVersion: 0,
+        failedLoginCount: 0,
+        passwordChangedAt: NOW.toISOString(),
+        createdAt: NOW.toISOString(),
+        updatedAt: NOW.toISOString(),
+      },
+      ConditionExpression: 'attribute_not_exists(#username)',
+      ExpressionAttributeNames: { '#username': 'username' },
+    });
+  });
+
+  it('stores a manager without a team', async () => {
+    send.mockResolvedValue({});
+
+    await createAccount(
+      {
+        username: 'manager@example.com',
+        role: 'MANAGER',
+        displayName: 'Juristic manager',
+        passwordHash: '$2b$12$hash',
+      },
+      NOW,
+    );
+
+    expect(send.mock.calls[0][0].input.Item).not.toHaveProperty('teamId');
+  });
+
+  it('never overwrites an existing account', async () => {
+    send.mockRejectedValue(conditionalCheckFailed());
+    await expect(createAccount(technician, NOW)).resolves.toBe('exists');
+  });
+
+  it('passes on any other error', async () => {
+    send.mockRejectedValue(new Error('throttled'));
+    await expect(createAccount(technician, NOW)).rejects.toThrow('throttled');
+  });
+
+  it.each([
+    ['a username that is not an email', { username: 'plumbing-team' }],
+    ['a technician without a team', { teamId: undefined }],
+    ['a technician of an unknown team', { teamId: 'NOT_A_TEAM' }],
+    ['a manager with a team', { role: 'MANAGER' as const }],
+  ])('refuses %s and writes nothing', async (_label, override) => {
+    await expect(
+      createAccount({ ...technician, ...override }, NOW),
+    ).rejects.toThrow();
+    expect(send).not.toHaveBeenCalled();
   });
 });
