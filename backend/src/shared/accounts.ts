@@ -42,6 +42,24 @@ export interface AccountRecord {
   updatedAt: string;
 }
 
+/** The account as the API shows it: StaffProfile in openapi.yaml, no secrets. */
+export interface StaffProfile {
+  id: string;
+  name: string;
+  role: StaffRole;
+  /** Present for a TECHNICIAN only. */
+  teamId?: string;
+}
+
+export function toStaffProfile(account: AccountRecord): StaffProfile {
+  return {
+    id: account.accountId,
+    name: account.displayName,
+    role: account.role,
+    ...(account.teamId ? { teamId: account.teamId } : {}),
+  };
+}
+
 export type FailedLoginResult =
   { locked: false } | { locked: true; lockedUntil: string };
 

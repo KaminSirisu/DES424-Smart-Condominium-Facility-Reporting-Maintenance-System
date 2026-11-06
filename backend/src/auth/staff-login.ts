@@ -7,6 +7,7 @@ import {
   isLocked,
   recordFailedLogin,
   recordSuccessfulLogin,
+  toStaffProfile,
 } from '../shared/accounts.js';
 import { verifyPassword } from '../shared/password.js';
 import {
@@ -145,12 +146,7 @@ export async function handler(
     const response = json(200, {
       accessToken,
       expiresInSeconds: STAFF_TOKEN_MAX_SECONDS,
-      staff: {
-        id: account.accountId,
-        name: account.displayName,
-        role: account.role,
-        ...(account.teamId ? { teamId: account.teamId } : {}),
-      },
+      staff: toStaffProfile(account),
     });
     return {
       ...response,

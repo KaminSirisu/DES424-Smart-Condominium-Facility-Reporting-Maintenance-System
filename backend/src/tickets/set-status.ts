@@ -2,7 +2,7 @@ import type {
   APIGatewayProxyEventV2,
   APIGatewayProxyStructuredResultV2,
 } from 'aws-lambda';
-import { staffFromAuthorization } from '../shared/staff-token.js';
+import { requireStaff } from '../shared/staff-auth.js';
 import { changeTicketStatus, getTicket } from '../shared/ticket-repository.js';
 import {
   UPLOAD_ID_PATTERN,
@@ -121,7 +121,7 @@ export async function handler(
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   try {
-    const staff = staffFromAuthorization(event.headers?.authorization);
+    const staff = await requireStaff(event.headers?.authorization);
     const ticketId = ticketIdFromPath(event);
     const input = parseBody(event);
 

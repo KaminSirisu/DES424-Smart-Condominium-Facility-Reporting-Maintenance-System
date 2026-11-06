@@ -18,9 +18,9 @@ import { extractBearerToken } from './line-token.js';
  *   token_version  raised on a password reset or disable (SR-10)
  *   iat, exp       seconds since the epoch; a token lives 12 hours at most
  *
- * Not checked here yet: that the account is still active and that
- * token_version is current (SR-10). That needs a read of the Accounts table,
- * so until it is added a disabled account's token works until it expires.
+ * Not checked here: that the account is still active and that token_version
+ * is current (SR-10). That needs a read of the Accounts table and is done by
+ * shared/staff-auth.ts, which every staff endpoint calls.
  */
 
 export type StaffRole = 'TECHNICIAN' | 'MANAGER';

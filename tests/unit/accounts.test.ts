@@ -11,6 +11,7 @@ import {
   normalizeUsername,
   recordFailedLogin,
   recordSuccessfulLogin,
+  toStaffProfile,
   type AccountRecord,
 } from '../../backend/src/shared/accounts.js';
 import { ddb } from '../../backend/src/shared/dynamodb-client.js';
@@ -241,5 +242,36 @@ describe('recordSuccessfulLogin', () => {
       ExpressionAttributeNames: { '#username': 'username' },
       ExpressionAttributeValues: { ':now': NOW.toISOString(), ':zero': 0 },
     });
+  });
+});
+
+describe('toStaffProfile', () => {
+  const account = (overrides: Partial<AccountRecord>) =>
+    ({
+      ...TECHNICIAN_ITEM,
+      ...overrides,
+    }) as unknown as AccountRecord;
+
+  it('shows the id, name, role and team of a technician', () => {
+    expect(toStaffProfile(account({}))).toEqual({
+      id: 'plumbing@example.com',
+      name: 'Plumbing team',
+      role: 'TECHNICIAN',
+      teamId: 'PLUMBING',
+    });
+  });
+
+  it('leaves the team out for a manager and shows no secret', () => {
+    const profile = toStaffProfile(
+      account({ role: 'MANAGER', teamId: undefined }),
+    );
+
+    expect(profile).toEqual({
+      id: 'plumbing@example.com',
+      name: 'Plumbing team',
+      role: 'MANAGER',
+    });
+    expect(profile).not.toHaveProperty('teamId');
+    expect(JSON.stringify(profile)).not.toContain('hash');
   });
 });

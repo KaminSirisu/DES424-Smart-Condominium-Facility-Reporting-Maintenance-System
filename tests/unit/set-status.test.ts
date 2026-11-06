@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
-import type { TicketRecord } from '../../backend/src/tickets/types';
+import { ApiError, type TicketRecord } from '../../backend/src/tickets/types';
 
 vi.mock('../../backend/src/shared/ticket-repository', () => ({
   getTicket: vi.fn(),
   changeTicketStatus: vi.fn(),
+}));
+vi.mock('../../backend/src/shared/staff-auth', () => ({
+  requireStaff: vi.fn(),
 }));
 vi.mock('../../backend/src/shared/upload-store', async (importOriginal) => ({
   ...(await importOriginal<
@@ -14,7 +17,11 @@ vi.mock('../../backend/src/shared/upload-store', async (importOriginal) => ({
 }));
 
 import { handler } from '../../backend/src/tickets/set-status';
-import { signStaffToken } from '../../backend/src/shared/staff-token';
+import { requireStaff } from '../../backend/src/shared/staff-auth';
+import {
+  signStaffToken,
+  staffFromAuthorization,
+} from '../../backend/src/shared/staff-token';
 import type { StaffIdentity } from '../../backend/src/shared/staff-token';
 import {
   changeTicketStatus,
@@ -103,6 +110,10 @@ describe('PATCH /tickets/{ticketId}/status', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     process.env.STAFF_JWT_SECRET = 'test-secret-test-secret-test-secret-1234';
+    // The token check only; the Accounts check has its own tests (staff-auth).
+    vi.mocked(requireStaff).mockImplementation(async (authorization) =>
+      staffFromAuthorization(authorization),
+    );
     vi.mocked(getTicket).mockResolvedValue(assigned);
     vi.mocked(changeTicketStatus).mockResolvedValue(undefined);
     vi.mocked(uploadIsImage).mockResolvedValue(true);
@@ -259,6 +270,18 @@ describe('PATCH /tickets/{ticketId}/status', () => {
       expect(
         (await handler(event({ status: 'IN_PROGRESS' }, null))).statusCode,
       ).toBe(401);
+    });
+
+    it('answers 401 when the account check fails, before reading the ticket', async () => {
+      vi.mocked(requireStaff).mockRejectedValue(
+        new ApiError(401, 'UNAUTHORIZED', 'Invalid or expired staff token.'),
+      );
+
+      const response = await handler(event({ status: 'IN_PROGRESS' }));
+
+      expect(response.statusCode).toBe(401);
+      expect(getTicket).not.toHaveBeenCalled();
+      expect(changeTicketStatus).not.toHaveBeenCalled();
     });
 
     it('answers 403 to a manager', async () => {
