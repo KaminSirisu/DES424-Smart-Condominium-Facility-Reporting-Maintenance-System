@@ -28,7 +28,7 @@ flowchart LR
     Notify --> SES[Amazon SES]
 ```
 
-The staff container serves the frontend; browser requests still reach API Gateway and the Lambda backend. The existing Lambda handlers need no container HTTP-server conversion for this option. The portal needs a container build, a running ECS service, an ALB or another HTTPS entry point, and its origin in API Gateway CORS. Only the LIFF Amplify app is deployed at present; this diagram is a **plan**, not an as-built claim. Confirm with the professor that a deployed staff portal container earns the special points before adding the ECS resources.
+The staff container serves the frontend; browser requests still reach API Gateway and the Lambda backend. The existing Lambda handlers need no container HTTP-server conversion for this option. The portal needs a container build, a running ECS service, an ALB or another HTTPS entry point, and its origin in API Gateway CORS. The LIFF Amplify app and Lambda health-only development stack are deployed; the staff container in this diagram is a **plan**, not an as-built claim. Confirm with the professor that a deployed staff portal container earns the special points before adding the ECS resources.
 
 ## If the backend API runs in ECS
 
@@ -66,7 +66,7 @@ Private Fargate tasks need outbound connectivity for pulling images and calling 
 
 ## Current decision
 
-The CDK stack under `infrastructure/aws` is a low-cost development slice, **not** an ECS implementation. It has not been deployed. The team should choose whether ECS is required for the backend API, only for the staff portal course bonus, or for neither before adding an ECS stack.
+The CDK stack under `infrastructure/aws` is a low-cost development slice, **not** an ECS implementation. Its foundation was deployed in G02 Singapore on 2026-11-07 with eight DynamoDB tables, a private upload bucket, a placeholder LINE secret, and a health-only API Gateway → Lambda endpoint. The ticket route and stream workers are not enabled yet. The team should choose whether ECS is required for the backend API, only for the staff portal course bonus, or for neither before adding an ECS stack.
 
 ## Recommendation for the current stage
 

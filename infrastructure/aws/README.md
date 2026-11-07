@@ -1,6 +1,8 @@
 # G02 development stack
 
-The CDK stack and its CloudFormation asset-bucket template target only AWS account `528301714999` in `ap-southeast-1`. They are **defined but not deployed**. Run commands from the repository root.
+The CDK stack and its CloudFormation asset-bucket template target only AWS account `528301714999` in `ap-southeast-1`. The foundation was deployed on 2026-11-07 from `infrastructure/scfrms-dev-stack`. Run commands from the repository root.
+
+Live health check: `GET https://h5ekgxy0j7.execute-api.ap-southeast-1.amazonaws.com/v1/health` returned HTTP 200 and `{"status":"ok"}`. This confirms API Gateway → Lambda only; the ticket route and stream workers are still disabled.
 
 This is the current Lambda-based development stack. The original [ECR/ECS/Fargate architecture](../../docs/architecture/deployment-topology.md) is a valid alternative for the backend API, but would replace the API Lambda deployment rather than be added on top of it without a routing decision.
 
@@ -64,7 +66,7 @@ aws cloudformation validate-template --template-body file://infrastructure/aws/a
 
 `infra:synth` needs no AWS changes. Template-mode `infra:diff` reads the account without creating a CloudFormation change set. Inspect the diff and expected costs before deployment. The dev stack creates only the health endpoint by default, so the data/API foundation can be prepared while integration values are still missing. Do **not** run `cdk bootstrap` for this app.
 
-After review, create the asset bucket before deploying the CDK stack:
+For a fresh environment, create the asset bucket before deploying the CDK stack. Both steps are already complete in G02 Singapore; subsequent `infra:deploy` runs update the dev stack:
 
 ```sh
 aws cloudformation deploy --template-file infrastructure/aws/asset-staging.json --stack-name Des424G02AssetStaging --region ap-southeast-1
