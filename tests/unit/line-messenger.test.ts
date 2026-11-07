@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import {
   LinePushError,
   lineSender,
@@ -46,6 +47,7 @@ describe('lineSender.push', () => {
     vi.stubEnv('LINE_CHANNEL_ACCESS_TOKEN', 'channel-token');
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
@@ -97,5 +99,24 @@ describe('lineSender.push', () => {
       'LINE_CHANNEL_ACCESS_TOKEN environment variable is not set.',
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('reads the deployed token from Secrets Manager and reuses it briefly', async () => {
+    vi.stubEnv('LINE_CHANNEL_ACCESS_TOKEN_SECRET_ARN', 'test-secret-arn');
+    const secretRead = vi
+      .spyOn(SecretsManagerClient.prototype, 'send')
+      .mockResolvedValue({ SecretString: 'from-secret' } as never);
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await lineSender.push('Uabc123', messages, 'retry-key-1');
+    await lineSender.push('Uabc123', messages, 'retry-key-2');
+
+    expect(secretRead).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe(
+      'Bearer from-secret',
+    );
+    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe(
+      'Bearer from-secret',
+    );
   });
 });

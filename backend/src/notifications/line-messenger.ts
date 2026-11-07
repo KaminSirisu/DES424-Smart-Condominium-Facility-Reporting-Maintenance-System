@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import {
+  GetSecretValueCommand,
+  SecretsManagerClient,
+} from '@aws-sdk/client-secrets-manager';
 
 /**
  * Pushes messages to a reporter's LINE chat through the Messaging API
@@ -63,7 +67,7 @@ export function retryKeyFor(eventId: string, lineUserId: string): string {
 
 export const lineSender: LineSender = {
   async push(to, messages, retryKey) {
-    const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+    const token = await lineChannelAccessToken();
     if (!token) {
       throw new Error(
         'LINE_CHANNEL_ACCESS_TOKEN environment variable is not set.',
@@ -85,3 +89,23 @@ export const lineSender: LineSender = {
     throw new LinePushError(response.status);
   },
 };
+
+let secretClient: SecretsManagerClient | undefined;
+let cachedToken: { value: string; expiresAt: number } | undefined;
+
+/** Read the token at runtime so it is not exposed in Lambda configuration. */
+async function lineChannelAccessToken(): Promise<string | undefined> {
+  const secretArn = process.env.LINE_CHANNEL_ACCESS_TOKEN_SECRET_ARN;
+  if (!secretArn) return process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  if (cachedToken && cachedToken.expiresAt > Date.now())
+    return cachedToken.value;
+
+  secretClient ??= new SecretsManagerClient({ region: process.env.AWS_REGION });
+  const result = await secretClient.send(
+    new GetSecretValueCommand({ SecretId: secretArn }),
+  );
+  const value = result.SecretString;
+  if (!value) throw new Error('LINE channel access token secret is empty.');
+  cachedToken = { value, expiresAt: Date.now() + 5 * 60_000 };
+  return value;
+}
