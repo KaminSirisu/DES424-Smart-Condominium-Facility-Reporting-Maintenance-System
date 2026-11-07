@@ -41,14 +41,33 @@ LINE only opens HTTPS pages, and your phone cannot reach `127.0.0.1`, so the dev
 
 1. Start the dev server with `npm run dev:liff`.
 2. In another terminal, run `cloudflared tunnel --url http://127.0.0.1:5173`. Use the full address `127.0.0.1`, because the dev server does not listen on IPv6. It prints a URL such as `https://some-random-words.trycloudflare.com`. Keep this terminal open.
-3. In the LINE Developers Console, set the LIFF app's Endpoint URL to that URL.
-4. Send `https://liff.line.me/<LIFF ID>` to yourself in a LINE chat and open it on your phone.
+3. In the LINE Developers Console, set the dev LIFF app's Endpoint URL to that URL. Never change the production LIFF app here (see Deployment).
+4. Send `https://liff.line.me/<dev LIFF ID>` to yourself in a LINE chat and open it on your phone.
 
 The quick tunnel URL changes every time `cloudflared` starts, so repeat step 3 after each restart. The LIFF link in step 4 stays the same.
 
 Do not use the free ngrok plan for this. It shows a "You are about to visit" warning page that the LINE app on iPhone displays as a blank white page.
 
 `vite.config.ts` allows `*.trycloudflare.com` and `*.ngrok-free.dev` hosts. If you use another tunnel, add its domain to `server.allowedHosts`. While the dev server runs, a small line under the heading shows whether the page is inside LINE, the login state, and the OS.
+
+## Deployment
+
+The production app is hosted on AWS Amplify Hosting at `https://main.<amplify-app-id>.amplifyapp.com`. Every push to `main` builds and deploys it automatically.
+
+`amplify.yml` at the repository root holds the build steps. Amplify runs them inside `frontend/liff-app` (the monorepo app root): it switches to Node 22, runs `npm ci` from the repository root because the workspace has a single lockfile, runs `npm run build`, and publishes `dist/`. A TypeScript error fails the build, so broken code is not deployed. To check a build before pushing, run `npm ci` and then `npm run build --workspace @scfrms/liff-app` from the repository root.
+
+The LINE Login channel has two LIFF apps, because each LIFF app has only one Endpoint URL:
+
+| LIFF app                   | Endpoint URL                         | Used for                            |
+| -------------------------- | ------------------------------------ | ----------------------------------- |
+| Condominium Reporter (dev) | your current `trycloudflare.com` URL | local testing inside LINE           |
+| Condominium Reporter       | the Amplify `main` URL               | production and the rich menu button |
+
+The rich menu button in LINE Official Account Manager opens `https://liff.line.me/<production LIFF ID>`. Do not point it at the dev LIFF app.
+
+Amplify does not read `.env`. The production LIFF ID is set as the `VITE_LIFF_ID` environment variable in the Amplify console (Hosting → Environment variables). Vite writes this value into the JavaScript at build time, so after changing it, redeploy the branch in Amplify. Without it, the deployed app runs in dev mode and shows the yellow banner. Like `.env`, this value is public; never add secrets as Amplify environment variables for this app.
+
+While the LINE Login channel is in "Developing" status, only its admins and the testers added under Roles can open the LIFF apps. Publish the channel before residents use the app.
 
 ## Credits
 
