@@ -1,18 +1,44 @@
+import { readFileSync } from 'node:fs';
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
+import { assetBucketName, g02Synthesizer } from '../lib/asset-staging.js';
 import { ScfrmsDevStack } from '../lib/scfrms-dev-stack.js';
+
+const env = { account: '528301714999', region: 'ap-southeast-1' };
 
 function template(context: Record<string, string> = {}): Template {
   const app = new App({ context });
   return Template.fromStack(
     new ScfrmsDevStack(app, 'TestStack', {
-      env: { account: '528301714999', region: 'ap-southeast-1' },
+      env,
+      synthesizer: g02Synthesizer(),
     }),
   );
 }
 
 describe('G02 development stack', () => {
+  it('uses a group-owned staging bucket without bootstrap roles', () => {
+    const staging = Template.fromString(
+      readFileSync(new URL('../asset-staging.json', import.meta.url), 'utf8'),
+    );
+    staging.hasResourceProperties('AWS::S3::Bucket', {
+      BucketName: assetBucketName,
+      BucketEncryption: Match.anyValue(),
+      PublicAccessBlockConfiguration: {
+        BlockPublicAcls: true,
+        BlockPublicPolicy: true,
+        IgnorePublicAcls: true,
+        RestrictPublicBuckets: true,
+      },
+    });
+    staging.resourceCountIs('AWS::IAM::Role', 0);
+
+    const dev = template();
+    dev.resourceCountIs('AWS::SSM::Parameter', 0);
+    expect(dev.toJSON().Parameters?.BootstrapVersion).toBeUndefined();
+  });
+
   it('matches the backend table keys, streams, and rate-limit TTL', () => {
     const t = template();
     t.resourceCountIs('AWS::DynamoDB::Table', 8);

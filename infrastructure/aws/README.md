@@ -1,6 +1,6 @@
 # G02 development stack
 
-This CDK stack targets only AWS account `528301714999` in `ap-southeast-1`. It is **defined but not deployed**. Run commands from the repository root.
+The CDK stack and its CloudFormation asset-bucket template target only AWS account `528301714999` in `ap-southeast-1`. They are **defined but not deployed**. Run commands from the repository root.
 
 This is the current Lambda-based development stack. The original [ECR/ECS/Fargate architecture](../../docs/architecture/deployment-topology.md) is a valid alternative for the backend API, but would replace the API Lambda deployment rather than be added on top of it without a routing decision.
 
@@ -10,24 +10,39 @@ The Lambda API and stream-worker design is agreed. The ECS staff portal can be
 decided separately after the course bonus is clarified. Deploy the development
 stack in slices; a successful health check is not a working ticket workflow.
 
-| Slice         | What is ready                                                                                                                | Gate before enabling it                                                                                                                                     |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Foundation    | Eight tables, upload bucket, LINE token secret placeholder, API Gateway, and `GET /v1/health` synthesize and pass CDK tests. | Confirm the AWS identity is G02 account `528301714999` in `ap-southeast-1`, check CDK bootstrap and `cdk diff`, then deploy.                                |
-| Ticket intake | `POST /tickets` Lambda handler and unit tests exist.                                                                         | Supply the LINE Login channel ID and implement `POST /uploads`; ticket creation rejects a photo upload that is not already present in S3.                   |
-| AI triage     | Tickets stream consumer, classifier, and unit tests exist.                                                                   | Choose a Bedrock model available to this account in Singapore; exercise a real invocation and confirm the model response works with the classifier.         |
-| Notifications | TicketEvents stream consumer, LINE sender, SES sender, and unit tests exist.                                                 | Replace the placeholder LINE secret, verify the SES sender and sandbox recipients or obtain production access, and seed Teams records with email addresses. |
-| Staff portal  | Frontend code exists.                                                                                                        | Finish its API endpoints and authentication; add ECS/ECR/ALB only if the team chooses that bonus path.                                                      |
+| Slice         | What is ready                                                                                                                                           | Gate before enabling it                                                                                                                                     |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Foundation    | Group-owned code asset bucket, eight tables, upload bucket, LINE token secret placeholder, API Gateway, and `GET /v1/health` synthesize and pass tests. | Confirm the G02 AWS identity, validate the asset template, and review `cdk diff`, then deploy.                                                              |
+| Ticket intake | `POST /tickets` Lambda handler and unit tests exist.                                                                                                    | Supply the LINE Login channel ID and implement `POST /uploads`; ticket creation rejects a photo upload that is not already present in S3.                   |
+| AI triage     | Tickets stream consumer, classifier, and unit tests exist.                                                                                              | Choose a Bedrock model available to this account in Singapore; exercise a real invocation and confirm the model response works with the classifier.         |
+| Notifications | TicketEvents stream consumer, LINE sender, SES sender, and unit tests exist.                                                                            | Replace the placeholder LINE secret, verify the SES sender and sandbox recipients or obtain production access, and seed Teams records with email addresses. |
+| Staff portal  | Frontend code exists.                                                                                                                                   | Finish its API endpoints and authentication; add ECS/ECR/ALB only if the team chooses that bonus path.                                                      |
 
 The repository currently has no AWS CLI or local AWS credential profile in the
 development environment. A console username and password alone do not
 authenticate local CDK commands. Use an approved CLI credential method or AWS
 CloudShell, and check the account with `aws sts get-caller-identity` before
-running `cdk diff`, bootstrap, or deploy. CloudShell must have access to the
+running `cdk diff` or deploy. CloudShell must have access to the
 committed IaC branch. Never copy console passwords or LINE secrets into this
 repository.
 
+The shared account has no default `/cdk-bootstrap/hnb659fds/version` parameter.
+This app uses `CliCredentialsStackSynthesizer` and a **G02-owned code asset S3
+bucket** instead of the standard CDK bootstrap roles. The small
+`asset-staging.json` CloudFormation template creates that bucket first. Submit
+it directly with the AWS CLI: CDK would try to upload its own stack template
+into the bucket before the bucket exists. The `Des424G02ScfrmsDev` stack then
+uploads Lambda bundles there. CDK uses the signed-in G02 user's existing
+permissions for CloudFormation and asset publishing. It does not create or
+assume CDK deploy, lookup, or publishing roles. The dev stack still creates a
+normal Lambda execution role; if G02 lacks permission for that, deployment will
+fail and an account administrator must grant the needed scope. The asset bucket
+is retained if its stack is deleted, so remove it deliberately during course
+cleanup.
+
 ## Resources
 
+- G02-owned private S3 code asset bucket for CDK Lambda bundles. No ECR repository is created.
 - Eight on-demand DynamoDB tables: `Tickets`, `TicketReporters`, `TicketPhotos`, `TicketEvents`, `Accounts`, `Teams`, `Notifications`, `RateLimits`. Table names start `des424-g02-scfrms-dev-`. `Tickets` and `TicketEvents` have streams; `RateLimits` has TTL on `expiresAt`.
 - Private S3 upload bucket with public access blocked and CORS limited to the existing LIFF Amplify origin (plus an optional admin origin).
 - HTTP API with `GET /v1/health` and coarse stage throttling (10 requests/second, burst 20). `POST /v1/tickets` is added when the LINE Login channel ID is supplied. Other OpenAPI routes are not deployed because their handlers are not implemented yet.
@@ -35,7 +50,7 @@ repository.
 - New stream mappings start at `LATEST`: enabling a worker later processes new events only. Existing `RECEIVED` tickets need an explicit backfill or manual triage plan.
 - Secrets Manager secret for the LINE Messaging API token. The generated initial value is a **placeholder**; update it in Secrets Manager before enabling notifications. The worker fetches it at runtime rather than storing it in Lambda environment variables.
 
-The tables and bucket have `RETAIN` removal policies. Deleting the stack does not delete them. This protects ticket data, but retained dev resources can keep costing money until intentionally cleaned up. This development stack creates no VPC, NAT gateway, ECS, ECR, RDS, or always-on compute.
+The tables and buckets have `RETAIN` removal policies. Deleting the stacks does not delete them. This protects ticket data, but retained dev resources can keep costing money until intentionally cleaned up. This deployment creates no VPC, NAT gateway, ECS, ECR, RDS, or always-on compute.
 
 ## Prepare and review
 
@@ -43,10 +58,18 @@ The tables and bucket have `RETAIN` removal policies. Deleting the stack does no
 npm ci
 npm run infra:typecheck
 npm run infra:synth
-npm run infra:diff
+npm run infra:diff -- --method template
+aws cloudformation validate-template --template-body file://infrastructure/aws/asset-staging.json --region ap-southeast-1
 ```
 
-`infra:synth` needs no AWS changes. `infra:diff` reads the account and may need CDK bootstrap access. Inspect the generated template and cost before deployment. The stack creates only the health endpoint by default, so it is safe to prepare the data/API foundation while integration values are still missing.
+`infra:synth` needs no AWS changes. Template-mode `infra:diff` reads the account without creating a CloudFormation change set. Inspect the diff and expected costs before deployment. The dev stack creates only the health endpoint by default, so the data/API foundation can be prepared while integration values are still missing. Do **not** run `cdk bootstrap` for this app.
+
+After review, create the asset bucket before deploying the CDK stack:
+
+```sh
+aws cloudformation deploy --template-file infrastructure/aws/asset-staging.json --stack-name Des424G02AssetStaging --region ap-southeast-1
+npm run infra:deploy
+```
 
 To include ticket intake, provide the **LINE Login channel ID** (the numeric channel ID, not the LIFF ID):
 
