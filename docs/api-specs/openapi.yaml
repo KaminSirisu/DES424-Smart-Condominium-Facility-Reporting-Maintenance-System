@@ -191,9 +191,12 @@ paths:
       description: >-
         The ticket view lists caller-visible photo metadata. An associated
         reporter may view their own defect photo and repair proof on an
-        associated ticket; authorized staff may view photos within their work
-        scope. The backend checks access before issuing a short-lived read URL.
-        Raw S3 keys are never returned.
+        associated ticket; a technician may view photos of their team's
+        tickets and a manager any photo. The backend checks access before
+        issuing a short-lived read URL (15 minutes at most) that points to a
+        re-encoded JPEG copy without EXIF metadata, never to the original.
+        A ticket outside the caller's scope answers 403; an unknown ticket or
+        photo answers 404. Raw S3 keys are never returned.
       operationId: getTicketPhotoAccess
       security:
         - lineToken: []
