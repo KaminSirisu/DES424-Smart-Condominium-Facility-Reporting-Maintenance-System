@@ -14,4 +14,8 @@ export default tseslint.config(
     files: ['backend/**/*.ts', 'tests/**/*.ts', 'infrastructure/aws/**/*.ts'],
     languageOptions: { globals: globals.node },
   },
+  {
+    files: ['tests/smoke/**/*.mjs'],
+    languageOptions: { globals: globals.node },
+  },
 );

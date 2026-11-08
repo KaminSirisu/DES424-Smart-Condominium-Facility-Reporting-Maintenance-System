@@ -18,6 +18,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
+    "test:smoke:intake": "node tests/smoke/intake.mjs",
     "build": "npm run build --workspaces",
     "infra:typecheck": "tsc -p infrastructure/aws/tsconfig.json --noEmit",
     "infra:synth": "cd infrastructure/aws && cdk synth",
