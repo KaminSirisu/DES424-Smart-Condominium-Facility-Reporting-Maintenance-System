@@ -112,10 +112,16 @@ describe('changeTicketStatus', () => {
     const [update, event, photo] = items();
     expect(update.Update?.UpdateExpression).toContain('completedAt = :now');
     expect(update.Update?.UpdateExpression).toContain('REMOVE teamStatusKey');
+    expect(update.Update?.UpdateExpression).toContain(
+      'teamDoneKey = :teamDoneKey, completedKey = :completedKey',
+    );
     expect(update.Update?.ExpressionAttributeValues).toMatchObject({
       ':from': 'IN_PROGRESS',
       ':to': 'DONE',
       ':version': 5,
+      // the team's completed list (TeamDoneIndex), newest completion first
+      ':teamDoneKey': 'TEAM#PLUMBING',
+      ':completedKey': `${NOW}#tkt_1`,
     });
     expect(update.Update?.ExpressionAttributeValues).not.toHaveProperty(
       ':teamStatusKey',
@@ -149,6 +155,18 @@ describe('changeTicketStatus', () => {
         now: NOW,
       }),
     ).rejects.toThrow('needs a proof photo');
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('refuses to finish a ticket without a team, which could not be listed', async () => {
+    await expect(
+      changeTicketStatus(ticket({ status: 'IN_PROGRESS', teamId: undefined }), {
+        to: 'DONE',
+        accountId: 'acct_plumbing',
+        now: NOW,
+        proof: { photoId: 'upl_proof', s3ObjectKey: 'k' },
+      }),
+    ).rejects.toThrow('has no team');
     expect(send).not.toHaveBeenCalled();
   });
 

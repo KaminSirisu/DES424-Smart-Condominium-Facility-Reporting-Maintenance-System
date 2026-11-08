@@ -1,4 +1,5 @@
 import {
+  BatchGetCommand,
   GetCommand,
   QueryCommand,
   TransactWriteCommand,
@@ -10,6 +11,7 @@ import {
   StoredTicketPhoto,
   TicketEventRecord,
   TicketRecord,
+  TicketStatus,
 } from '../tickets/types.js';
 
 /**
@@ -17,7 +19,8 @@ import {
  * (docs/database/dynamodb-access-patterns.md). One ticket is spread over:
  *
  *   Tickets          PK `ticketId`                       the ticket snapshot
- *       TeamOpenIndex: PK `teamStatusKey`, SK `createdKey`   (sparse: ASSIGNED only for now)
+ *       TeamOpenIndex: PK `teamStatusKey`, SK `createdKey`   (sparse: ASSIGNED and IN_PROGRESS)
+ *       TeamDoneIndex: PK `teamDoneKey`, SK `completedKey`   (sparse: DONE; added for the completed list)
  *       CreatedMonthIndex: PK `createdMonth`, SK `createdKey`
  *   TicketReporters  PK `ticketId`, SK `reporterLineUserId`
  *       ReporterTicketsIndex: PK `reporterLineUserId`, SK `associatedKey`
@@ -35,6 +38,8 @@ type TicketItem = Omit<TicketRecord, 'id' | 'photos'> & {
   createdMonth: string;
   createdKey: string;
   teamStatusKey?: string;
+  teamDoneKey?: string;
+  completedKey?: string;
 };
 
 type ReporterItem = {
@@ -82,6 +87,25 @@ function toReporterItem(record: TicketRecord): ReporterItem {
     associatedAt: record.createdAt,
     associatedKey: timeKey(record.createdAt, record.id),
   };
+}
+
+/** The domain record for a stored ticket item and its photos. */
+function toTicketRecord(
+  item: TicketItem,
+  photos: StoredTicketPhoto[],
+): TicketRecord {
+  return {
+    ...omit(item, [
+      'ticketId',
+      'createdMonth',
+      'createdKey',
+      'teamStatusKey',
+      'teamDoneKey',
+      'completedKey',
+    ]),
+    id: item.ticketId,
+    photos,
+  } as TicketRecord;
 }
 
 function toPhotoItem(ticketId: string, photo: StoredTicketPhoto): PhotoItem {
@@ -151,12 +175,7 @@ export async function getTicket(
   ]);
   if (!ticket.Item) return null;
 
-  const item = ticket.Item as TicketItem;
-  return {
-    ...omit(item, ['ticketId', 'createdMonth', 'createdKey', 'teamStatusKey']),
-    id: item.ticketId,
-    photos,
-  } as TicketRecord;
+  return toTicketRecord(ticket.Item as TicketItem, photos);
 }
 
 /**
@@ -313,7 +332,9 @@ export interface StatusChange {
  *
  *  - IN_PROGRESS puts the ticket in the team's IN_PROGRESS queue
  *    (`teamStatusKey`); DONE removes it from the open queue.
- *  - DONE also stores the repair proof photo (TicketPhotos) and `completedAt`.
+ *  - DONE also stores the repair proof photo (TicketPhotos) and `completedAt`,
+ *    and puts the ticket in the team's completed list (`teamDoneKey`,
+ *    `completedKey`; reopening a ticket must remove both).
  *
  * Only succeeds if the ticket is in the expected status at the version that
  * was read. Otherwise it fails with
@@ -327,7 +348,7 @@ export async function changeTicketStatus(
   if (done && !change.proof) {
     throw new Error('A DONE status needs a proof photo.');
   }
-  if (!done && !ticket.teamId) {
+  if (!ticket.teamId) {
     throw new Error(`Ticket ${ticket.id} has no team.`);
   }
 
@@ -357,7 +378,10 @@ export async function changeTicketStatus(
   if (done) {
     update =
       'SET #status = :to, completedAt = :now, updatedAt = :now, ' +
-      '#version = #version + :one REMOVE teamStatusKey';
+      '#version = #version + :one, teamDoneKey = :teamDoneKey, ' +
+      'completedKey = :completedKey REMOVE teamStatusKey';
+    values[':teamDoneKey'] = `TEAM#${ticket.teamId}`;
+    values[':completedKey'] = timeKey(change.now, ticket.id);
   } else {
     update =
       'SET #status = :to, updatedAt = :now, #version = #version + :one, ' +
@@ -580,4 +604,260 @@ export async function mergeTickets(
       ],
     }),
   );
+}
+
+/** Index page reads for one list request, so filtering cannot run without end. */
+const MAX_INDEX_READS = 5;
+
+export interface TicketFilter {
+  /** Keep only these statuses. */
+  statuses?: TicketStatus[];
+  /** Keep only tickets with exactly this location text. */
+  location?: string;
+}
+
+function matches(ticket: TicketRecord, filter: TicketFilter): boolean {
+  if (filter.statuses && !filter.statuses.includes(ticket.status)) return false;
+  if (filter.location !== undefined && ticket.location !== filter.location) {
+    return false;
+  }
+  return true;
+}
+
+/** BatchGetItem takes at most 100 keys. */
+const BATCH_GET_KEYS = 100;
+const BATCH_GET_RETRIES = 3;
+
+/**
+ * The tickets with their photos, by id, read from the base table (strongly
+ * consistent, so a list never shows a stale snapshot taken from an index).
+ * An id with no ticket is left out.
+ */
+async function loadTickets(ids: string[]): Promise<Map<string, TicketRecord>> {
+  const items: TicketItem[] = [];
+  for (let i = 0; i < ids.length; i += BATCH_GET_KEYS) {
+    let keys: Record<string, unknown>[] = ids
+      .slice(i, i + BATCH_GET_KEYS)
+      .map((ticketId) => ({ ticketId }));
+    for (let attempt = 0; keys.length > 0; attempt++) {
+      if (attempt > BATCH_GET_RETRIES) {
+        throw new Error('Tickets could not be read: DynamoDB is throttling.');
+      }
+      const result = await ddb.send(
+        new BatchGetCommand({
+          RequestItems: {
+            [tableName('TICKETS')]: { Keys: keys, ConsistentRead: true },
+          },
+        }),
+      );
+      items.push(
+        ...((result.Responses?.[tableName('TICKETS')] ?? []) as TicketItem[]),
+      );
+      keys = result.UnprocessedKeys?.[tableName('TICKETS')]?.Keys ?? [];
+    }
+  }
+
+  const records = await Promise.all(
+    items.map(async (item) =>
+      toTicketRecord(item, await getPhotos(item.ticketId)),
+    ),
+  );
+  return new Map(records.map((record) => [record.id, record]));
+}
+
+export interface TicketListPage<Position> {
+  tickets: TicketRecord[];
+  /** Where the next page starts; absent when there is nothing more to read. */
+  next?: Position;
+}
+
+/**
+ * The tickets a reporter is associated with, newest association first,
+ * merged sources included (ReporterTicketsIndex, eventually consistent).
+ * `after` is the `next` of the previous page.
+ */
+export async function listReporterTickets(
+  reporterLineUserId: string,
+  options: { limit: number; after?: string; filter: TicketFilter },
+): Promise<TicketListPage<string>> {
+  const tickets: TicketRecord[] = [];
+  let after = options.after;
+
+  for (let read = 0; read < MAX_INDEX_READS; read++) {
+    const page = await ddb.send(
+      new QueryCommand({
+        TableName: tableName('TICKET_REPORTERS'),
+        IndexName: 'ReporterTicketsIndex',
+        KeyConditionExpression: after
+          ? 'reporterLineUserId = :reporter AND associatedKey < :after'
+          : 'reporterLineUserId = :reporter',
+        ExpressionAttributeValues: {
+          ':reporter': reporterLineUserId,
+          ...(after ? { ':after': after } : {}),
+        },
+        ScanIndexForward: false,
+        Limit: options.limit,
+      }),
+    );
+    const entries = (page.Items ?? []) as ReporterItem[];
+    const loaded = await loadTickets(entries.map((e) => e.ticketId));
+
+    for (const entry of entries) {
+      after = entry.associatedKey;
+      const ticket = loaded.get(entry.ticketId);
+      if (ticket && matches(ticket, options.filter)) {
+        tickets.push(ticket);
+        if (tickets.length === options.limit) return { tickets, next: after };
+      }
+    }
+    if (!page.LastEvaluatedKey) return { tickets };
+  }
+  return { tickets, next: after };
+}
+
+export type OpenStatus = 'ASSIGNED' | 'IN_PROGRESS';
+
+/** Per open status, the `createdKey` of the last ticket already returned. */
+export type OpenPosition = Partial<Record<OpenStatus, string>>;
+
+interface OpenQueue {
+  status: OpenStatus;
+  position?: string;
+  buffer: { ticketId: string; createdKey: string }[];
+  exhausted: boolean;
+}
+
+/**
+ * A team's open tickets in the given statuses (TeamOpenIndex), oldest first
+ * across the statuses. `after` is the `next` of the previous page.
+ */
+export async function listTeamTickets(
+  teamId: string,
+  statuses: OpenStatus[],
+  options: { limit: number; after: OpenPosition; filter: TicketFilter },
+): Promise<TicketListPage<OpenPosition>> {
+  const queues: OpenQueue[] = statuses.map((status) => ({
+    status,
+    position: options.after[status],
+    buffer: [],
+    exhausted: false,
+  }));
+  let reads = 0;
+
+  async function fill(queue: OpenQueue): Promise<void> {
+    reads++;
+    const page = await ddb.send(
+      new QueryCommand({
+        TableName: tableName('TICKETS'),
+        IndexName: 'TeamOpenIndex',
+        KeyConditionExpression: queue.position
+          ? 'teamStatusKey = :key AND createdKey > :after'
+          : 'teamStatusKey = :key',
+        ExpressionAttributeValues: {
+          ':key': `TEAM#${teamId}#STATUS#${queue.status}`,
+          ...(queue.position ? { ':after': queue.position } : {}),
+        },
+        Limit: options.limit,
+      }),
+    );
+    queue.buffer = (page.Items ?? []) as OpenQueue['buffer'];
+    queue.exhausted = !page.LastEvaluatedKey;
+  }
+
+  /** The next `count` entries in createdKey order across the queues. */
+  async function take(count: number): Promise<[OpenQueue, string][]> {
+    const taken: [OpenQueue, string][] = [];
+    while (taken.length < count && reads < MAX_INDEX_READS * queues.length) {
+      for (const queue of queues) {
+        if (queue.buffer.length === 0 && !queue.exhausted) await fill(queue);
+      }
+      const heads = queues.filter((q) => q.buffer.length > 0);
+      if (heads.length === 0) break;
+      const first = heads.reduce((a, b) =>
+        a.buffer[0].createdKey <= b.buffer[0].createdKey ? a : b,
+      );
+      const entry = first.buffer.shift() as OpenQueue['buffer'][number];
+      first.position = entry.createdKey;
+      taken.push([first, entry.ticketId]);
+    }
+    return taken;
+  }
+
+  const tickets: TicketRecord[] = [];
+  while (tickets.length < options.limit) {
+    const taken = await take(options.limit - tickets.length);
+    if (taken.length === 0) break;
+    const loaded = await loadTickets(taken.map(([, id]) => id));
+    for (const [, id] of taken) {
+      const ticket = loaded.get(id);
+      if (ticket && matches(ticket, options.filter)) tickets.push(ticket);
+    }
+  }
+
+  const more = queues.some((q) => q.buffer.length > 0 || !q.exhausted);
+  if (!more) return { tickets };
+  const next: OpenPosition = {};
+  for (const queue of queues) {
+    if (queue.position) next[queue.status] = queue.position;
+  }
+  return { tickets, next };
+}
+
+/**
+ * A team's completed tickets, newest completion first (TeamDoneIndex).
+ * `from` and `toExclusive` bound `completedAt` as ISO date or timestamp
+ * prefixes; `after` is the `next` of the previous page.
+ */
+export async function listCompletedTickets(
+  teamId: string,
+  options: {
+    limit: number;
+    after?: string;
+    from?: string;
+    toExclusive?: string;
+    filter: TicketFilter;
+  },
+): Promise<TicketListPage<string>> {
+  const tickets: TicketRecord[] = [];
+  // Entries at or above this key were returned already or are out of range.
+  const upper = [options.after, options.toExclusive]
+    .filter((v): v is string => v !== undefined)
+    .sort()[0];
+  let upperKey = upper;
+
+  for (let read = 0; read < MAX_INDEX_READS; read++) {
+    const page = await ddb.send(
+      new QueryCommand({
+        TableName: tableName('TICKETS'),
+        IndexName: 'TeamDoneIndex',
+        KeyConditionExpression:
+          'teamDoneKey = :key AND completedKey BETWEEN :low AND :high',
+        ExpressionAttributeValues: {
+          ':key': `TEAM#${teamId}`,
+          ':low': options.from ?? '0',
+          ':high': upperKey ?? '9',
+        },
+        ScanIndexForward: false,
+        Limit: options.limit + 1,
+      }),
+    );
+    const entries = ((page.Items ?? []) as TicketItem[]).filter(
+      (item) =>
+        upperKey === undefined || (item.completedKey as string) < upperKey,
+    );
+    const loaded = await loadTickets(entries.map((e) => e.ticketId));
+
+    for (const entry of entries) {
+      upperKey = entry.completedKey as string;
+      const ticket = loaded.get(entry.ticketId);
+      if (ticket && matches(ticket, options.filter)) {
+        tickets.push(ticket);
+        if (tickets.length === options.limit) {
+          return { tickets, next: upperKey };
+        }
+      }
+    }
+    if (!page.LastEvaluatedKey) return { tickets };
+  }
+  return { tickets, next: upperKey };
 }
