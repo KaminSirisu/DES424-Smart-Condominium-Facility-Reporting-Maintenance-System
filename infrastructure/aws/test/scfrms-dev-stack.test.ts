@@ -99,6 +99,28 @@ describe('G02 development stack', () => {
     t.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'POST /v1/tickets',
     });
+    t.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /v1/uploads',
+    });
+    t.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'des424-g02-scfrms-dev-createupload',
+      Environment: {
+        Variables: Match.objectLike({
+          LINE_LOGIN_CHANNEL_ID: '1234567890',
+          UPLOAD_BUCKET_NAME: Match.anyValue(),
+        }),
+      },
+    });
+    t.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: Match.arrayWith(['s3:PutObject']),
+            Effect: 'Allow',
+          }),
+        ]),
+      },
+    });
     t.resourceCountIs('AWS::Lambda::EventSourceMapping', 2);
     t.resourceCountIs('AWS::SQS::Queue', 2);
     t.hasResourceProperties('AWS::Lambda::EventSourceMapping', {

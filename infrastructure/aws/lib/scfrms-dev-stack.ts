@@ -235,6 +235,20 @@ export class ScfrmsDevStack extends Stack {
 
     const lineChannelId = stringContext(this, 'lineLoginChannelId');
     if (lineChannelId) {
+      const upload = fn('CreateUpload', 'uploads/reporter-upload.ts', {
+        ...tableEnv,
+        LINE_LOGIN_CHANNEL_ID: lineChannelId,
+      });
+      uploads.grantPut(upload, 'uploads/*');
+      api.addRoutes({
+        path: '/v1/uploads',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: new HttpLambdaIntegration(
+          'CreateUploadIntegration',
+          upload,
+        ),
+      });
+
       const create = fn('CreateTicket', 'tickets/create-ticket.ts', {
         ...tableEnv,
         LINE_LOGIN_CHANNEL_ID: lineChannelId,
