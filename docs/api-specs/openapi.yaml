@@ -75,8 +75,14 @@ paths:
       summary: List tickets visible to the caller
       description: >-
         Reporter results are restricted to that verified LINE identity, including
-        associations retained after a merge. Staff may use filters within their
-        authorized scope. A ticket ID or filter never bypasses authorization.
+        associations retained after a merge, newest first. A technician sees
+        their team's tickets: ASSIGNED and IN_PROGRESS (the default) oldest
+        first, or DONE alone newest completion first. A manager must name the
+        team with teamId. Staff can list only ASSIGNED, IN_PROGRESS or DONE
+        tickets, and DONE cannot be combined with another status (422). A page
+        can hold fewer tickets than limit while nextCursor is present, because
+        filters are applied after the index is read; send nextCursor back as it
+        is. A ticket ID or filter never bypasses authorization.
       operationId: listTickets
       security:
         - lineToken: []
@@ -86,23 +92,34 @@ paths:
         - $ref: '#/components/parameters/Limit'
         - in: query
           name: status
+          description: Repeat the parameter to ask for several statuses.
+          style: form
+          explode: true
           schema:
-            $ref: '#/components/schemas/TicketStatus'
+            type: array
+            items:
+              $ref: '#/components/schemas/TicketStatus'
         - in: query
           name: location
           description: Match the reporter-entered location text exactly.
           schema: { type: string }
         - in: query
           name: teamId
-          description: Staff filter only.
+          description: >-
+            Staff filter only (a reporter gets 403). A technician may give only
+            their own team (another is 403); a manager must give one.
           schema: { type: string }
         - in: query
           name: completedFrom
-          description: Staff-only lower bound for completedAt, inclusive.
+          description: >-
+            Staff-only lower bound for completedAt, inclusive, as a UTC date.
+            Needs status=DONE.
           schema: { type: string, format: date }
         - in: query
           name: completedTo
-          description: Staff-only upper bound for completedAt, inclusive.
+          description: >-
+            Staff-only upper bound for completedAt, inclusive, as a UTC date.
+            Needs status=DONE.
           schema: { type: string, format: date }
       responses:
         '200':
@@ -111,8 +128,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TicketPage'
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
     post:
       tags: [Tickets]
       summary: Submit a facility defect report
