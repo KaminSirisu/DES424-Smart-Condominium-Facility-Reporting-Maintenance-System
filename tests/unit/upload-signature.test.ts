@@ -21,13 +21,23 @@ import {
 const JPEG = [0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1];
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d];
 const WEBP = [0x52, 0x49, 0x46, 0x46, 0x24, 0, 0, 0, 0x57, 0x45, 0x42, 0x50];
+const HEIC = [
+  0,
+  0,
+  0,
+  0x18,
+  ...[0x66, 0x74, 0x79, 0x70],
+  0x68,
+  0x65,
+  0x69,
+  0x63,
+];
 const text = (value: string) => [...Buffer.from(value)];
 
 describe('detectImageType', () => {
   it.each([
     ['a JPEG', JPEG, 'jpeg'],
     ['a PNG', PNG, 'png'],
-    ['a WebP', WEBP, 'webp'],
   ])('recognises %s', (_label, bytes, type) => {
     expect(detectImageType(Uint8Array.from(bytes))).toBe(type);
   });
@@ -38,13 +48,11 @@ describe('detectImageType', () => {
     ['an HTML page', text('<html><body>x</body></html>')],
     ['a PDF', text('%PDF-1.7 ...')],
     ['a GIF', text('GIF89a......')],
-    [
-      'a RIFF file that is not WebP',
-      [...text('RIFF'), 0, 0, 0, 0, ...text('WAVE')],
-    ],
+    ['a WebP, which Rekognition and LINE cannot read', WEBP],
+    ['a HEIC photo, the iPhone default', HEIC],
+    ['a RIFF file such as WAV', [...text('RIFF'), 0, 0, 0, 0, ...text('WAVE')]],
     ['a cut-off JPEG header', [0xff, 0xd8]],
     ['a cut-off PNG header', [0x89, 0x50, 0x4e, 0x47]],
-    ['a cut-off WebP header', [...text('RIFF'), 0, 0, 0, 0, 0x57]],
   ])('rejects %s', (_label, bytes) => {
     expect(detectImageType(Uint8Array.from(bytes))).toBeNull();
   });
@@ -70,7 +78,7 @@ describe('uploadIsImage', () => {
     expect(send.mock.calls[0][0].input).toEqual({
       Bucket: 'test-bucket',
       Key: 'uploads/REPAIR_PROOF/acct_plumbing/upl_1',
-      Range: 'bytes=0-11',
+      Range: 'bytes=0-7',
     });
   });
 

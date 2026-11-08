@@ -164,15 +164,15 @@ describe('POST /uploads', () => {
   });
 
   describe('the image limits (SR-20)', () => {
-    it.each(['image/jpeg', 'image/png', 'image/webp'])(
-      'accepts %s',
-      async (contentType) => {
-        const response = await handler(event({ ...defect, contentType }));
-        expect(response.statusCode).toBe(201);
-      },
-    );
+    it.each(['image/jpeg', 'image/png'])('accepts %s', async (contentType) => {
+      const response = await handler(event({ ...defect, contentType }));
+      expect(response.statusCode).toBe(201);
+    });
 
     it.each([
+      'image/webp',
+      'image/heic',
+      'image/heif',
       'image/gif',
       'image/svg+xml',
       'application/pdf',

@@ -21,7 +21,8 @@ import { ApiError, type PhotoPurpose } from '../tickets/types.js';
  * who proves who they are with a LINE token, asks for DEFECT; a technician,
  * with a staff token, asks for REPAIR_PROOF. A manager gets 403, because only a
  * technician can finish a job (the requirements document would let a manager
- * ask too). The image must be JPEG, PNG or WebP of at most 10 MB (SR-20) or
+ * ask too). The image must be JPEG or PNG of at most 10 MiB (SR-20; WebP is
+ * left out because Rekognition and LINE cannot read it) or
  * the answer is 422.
  *
  * The URL is a presigned PUT that expires after 5 minutes (SR-19). The key is
@@ -127,7 +128,7 @@ export async function handler(
       throw new ApiError(
         422,
         'UNPROCESSABLE',
-        'contentType must be image/jpeg, image/png or image/webp.',
+        'contentType must be image/jpeg or image/png.',
       );
     }
     if (intent.sizeBytes > UPLOAD_MAX_BYTES) {
