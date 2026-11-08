@@ -5,7 +5,10 @@ vi.mock('../../backend/src/shared/dynamodb-client.js', () => ({
 }));
 
 import { ddb } from '../../backend/src/shared/dynamodb-client.js';
-import { listReporterIds } from '../../backend/src/shared/ticket-reporters.js';
+import {
+  isReporterOf,
+  listReporterIds,
+} from '../../backend/src/shared/ticket-reporters.js';
 
 const send = vi.mocked(ddb.send) as unknown as ReturnType<typeof vi.fn>;
 
@@ -63,5 +66,31 @@ describe('listReporterIds', () => {
     await expect(listReporterIds('tkt_1')).rejects.toThrow(
       'TICKET_REPORTERS_TABLE_NAME environment variable is not set.',
     );
+  });
+});
+
+describe('isReporterOf', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.stubEnv('TICKET_REPORTERS_TABLE_NAME', 'TestReporters');
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('is true when the reporter has an item for the ticket, read with strong consistency', async () => {
+    send.mockResolvedValue({
+      Item: { ticketId: 'tkt_1', reporterLineUserId: 'Uaaa' },
+    });
+
+    await expect(isReporterOf('tkt_1', 'Uaaa')).resolves.toBe(true);
+    expect(send.mock.calls[0][0].input).toEqual({
+      TableName: 'TestReporters',
+      Key: { ticketId: 'tkt_1', reporterLineUserId: 'Uaaa' },
+      ConsistentRead: true,
+    });
+  });
+
+  it('is false when there is no item', async () => {
+    send.mockResolvedValue({});
+    await expect(isReporterOf('tkt_1', 'Ubbb')).resolves.toBe(false);
   });
 });

@@ -40,9 +40,14 @@ paths:
       tags: [Uploads]
       summary: Request a short-lived image upload URL
       description: >-
-        Reporters may request DEFECT uploads; authorized staff may request
-        REPAIR_PROOF uploads. A later ticket action verifies the uploaded object,
-        its purpose, and its owner before accepting the uploadId.
+        A reporter requests DEFECT uploads with a LINE token; a technician
+        requests REPAIR_PROOF uploads with a staff token. A manager gets 403,
+        because only a technician can finish a job. The URL is a presigned PUT
+        that expires after 5 minutes and is signed for exactly the requested
+        content type and size: send the file with the returned method and
+        headers. The image must be JPEG, PNG or WebP of at most 10 MB, otherwise
+        422. A later ticket action verifies the uploaded object, its purpose, and
+        its owner before accepting the uploadId.
       operationId: createUploadIntent
       security:
         - lineToken: []
@@ -155,6 +160,9 @@ paths:
       tags: [Tickets]
       summary: Get a ticket visible to the caller
       description: >-
+        A technician sees the tickets of their team, a manager sees every
+        ticket, and a reporter sees the tickets they reported. A ticket outside
+        the caller's scope answers 404, the same as a ticket that does not exist.
         A merged source remains discoverable by an associated reporter and
         includes mergedIntoTicketId. Raw LINE IDs and S3 keys are never returned.
       operationId: getTicket
@@ -679,9 +687,14 @@ components:
         contentType:
           {
             type: string,
-            description: Allowed image MIME type; exact list is open.,
+            description: 'One of image/jpeg, image/png or image/webp.',
           }
-        sizeBytes: { type: integer, minimum: 1 }
+        sizeBytes:
+          {
+            type: integer,
+            minimum: 1,
+            description: 'Exact size of the file in bytes; at most 10485760 (10 MB).',
+          }
     UploadGrant:
       type: object
       required: [uploadId, uploadUrl, method, headers, expiresAt]

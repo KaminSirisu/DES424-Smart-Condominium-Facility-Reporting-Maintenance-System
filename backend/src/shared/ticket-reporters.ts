@@ -1,4 +1,4 @@
-import { QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb } from './dynamodb-client.js';
 import { tableName } from './tables.js';
 
@@ -7,6 +7,21 @@ import { tableName } from './tables.js';
  * (SCFRMS-28: PK `ticketId`, SK `reporterLineUserId`). A ticket merged from
  * several reports has one item per reporter.
  */
+
+/** True if this LINE user is one of the ticket's reporters, merged tickets included. */
+export async function isReporterOf(
+  ticketId: string,
+  reporterLineUserId: string,
+): Promise<boolean> {
+  const result = await ddb.send(
+    new GetCommand({
+      TableName: tableName('TICKET_REPORTERS'),
+      Key: { ticketId, reporterLineUserId },
+      ConsistentRead: true,
+    }),
+  );
+  return result.Item !== undefined;
+}
 
 /** The LINE user ids of every reporter of the ticket. Strongly consistent. */
 export async function listReporterIds(ticketId: string): Promise<string[]> {
