@@ -200,7 +200,7 @@ Every ticket of a page is then read from the `Tickets` table with strongly consi
 
 ## Rate limit (SR-31, proposal)
 
-`POST /tickets` lets one reporter create 10 tickets per hour (`TICKET_RATE_LIMIT_PER_HOUR`, default 10); the next one gets `429` with code `RATE_LIMITED` and a `Retry-After` header in seconds. The count is one `RateLimits` item per reporter and clock hour (a fixed window), incremented by a single conditional update, so parallel requests cannot pass the limit. Only a request that would create a ticket counts: a retry of an existing ticket (same `Idempotency-Key`), an invalid request and a failed upload check do not. A reporter can send up to twice the limit around the turn of an hour. The per-IP limit of SR-31 is an AWS WAF rule on API Gateway and is not part of this code. The table needs DynamoDB TTL enabled on `expiresAt` (epoch seconds) and must have no stream, so counting never starts a worker.
+`POST /tickets` lets one reporter create 10 tickets per hour (`TICKET_RATE_LIMIT_PER_HOUR`, default 10); the next one gets `429` with code `RATE_LIMITED` and a `Retry-After` header in seconds. The count is one `RateLimits` item per reporter and clock hour (a fixed window), incremented by a single conditional update, so parallel requests cannot pass the limit. A retry of an existing ticket (same `Idempotency-Key`), an invalid request and a failed upload check do not reach the counter. A failed ticket transaction after the increment can still consume a quota slot; this needs a backend fix. A reporter can send up to twice the limit around the turn of an hour. The per-IP limit of SR-31 remains open: the dev IaC uses HTTP API for the handler's payload v2 contract, and AWS WAF cannot attach directly to that API type. The table needs DynamoDB TTL enabled on `expiresAt` (epoch seconds) and must have no stream, so counting never starts a worker.
 
 ## Stream consumers
 
@@ -354,7 +354,7 @@ Not verified on real AWS yet: a URL signed with a Lambda role's temporary creden
 
 **Configuration**
 
-- Environment: `LINE_CHANNEL_ACCESS_TOKEN`, `BUILDING_SECURITY_PHONE` (optional), `LIFF_URL` (optional; buttons are left out when it is not an https URL), `UPLOAD_BUCKET_NAME` and `PROOF_PHOTO_URL_TTL_SECONDS` (optional) for the proof photo, and the table names above. SR-34 says the channel secret and access token must live in AWS Secrets Manager, not in files or Git, so the infrastructure should fill `LINE_CHANNEL_ACCESS_TOKEN` from there at deploy time.
+- Environment: `LINE_CHANNEL_ACCESS_TOKEN_SECRET_ARN` in AWS (the worker reads its value at runtime), `BUILDING_SECURITY_PHONE` (optional), `LIFF_URL` (optional; buttons are left out when it is not an https URL), `UPLOAD_BUCKET_NAME` and `PROOF_PHOTO_URL_TTL_SECONDS` (optional) for the proof photo, and the table names above. Local tests can still use `LINE_CHANNEL_ACCESS_TOKEN` when the secret ARN is absent. SR-34 requires the production token in AWS Secrets Manager, not in files, Git, or Lambda environment variables.
 - IAM for the worker: read on `Tickets`, `TicketPhotos` and `TicketReporters`, and read and write on `Notifications`. For the proof photo: `s3:GetObject` on the originals (`uploads/REPAIR_PROOF/*`), and `s3:PutObject` and `s3:GetObject` on `thumbnails/*` (the signed URL works only if the signing role can read the copy).
 - LINE: the LIFF channel and the Messaging API channel must sit under the same LINE provider, and the reporter must have added the Official Account as a friend, or the push fails (SR-05).
 
