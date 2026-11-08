@@ -45,7 +45,7 @@ paths:
         because only a technician can finish a job. The URL is a presigned PUT
         that expires after 5 minutes and is signed for exactly the requested
         content type and size: send the file with the returned method and
-        headers. The image must be JPEG, PNG or WebP of at most 10 MB, otherwise
+        headers. The image must be JPEG or PNG of at most 10 MiB, otherwise
         422. A later ticket action verifies the uploaded object, its purpose, and
         its owner before accepting the uploadId.
       operationId: createUploadIntent
@@ -707,10 +707,7 @@ components:
           type: string
           enum: [DEFECT, REPAIR_PROOF]
         contentType:
-          {
-            type: string,
-            description: 'One of image/jpeg, image/png or image/webp.',
-          }
+          { type: string, description: 'One of image/jpeg or image/png.' }
         sizeBytes:
           {
             type: integer,
