@@ -9,18 +9,26 @@ vi.mock('../../backend/src/shared/line-token', async (importOriginal) => ({
   >()),
   verifyLineToken: vi.fn(),
 }));
-vi.mock('../../backend/src/shared/ticket-repository', () => ({
-  createTicket: vi.fn(),
-  getTicket: vi.fn(),
-}));
+vi.mock(
+  '../../backend/src/shared/ticket-repository',
+  async (importOriginal) => ({
+    QuotaExceededError: (
+      await importOriginal<
+        typeof import('../../backend/src/shared/ticket-repository')
+      >()
+    ).QuotaExceededError,
+    createTicket: vi.fn(),
+    getTicket: vi.fn(),
+  }),
+);
 vi.mock('../../backend/src/shared/rate-limit', () => ({
-  consumeTicketQuota: vi.fn(),
+  ticketQuotaClaim: vi.fn(),
 }));
 vi.mock('../../backend/src/shared/upload-store', async (importOriginal) => ({
   ...(await importOriginal<
     typeof import('../../backend/src/shared/upload-store')
   >()),
-  uploadExists: vi.fn(),
+  uploadIsImage: vi.fn(),
 }));
 
 import {
@@ -29,13 +37,18 @@ import {
 } from '../../backend/src/tickets/create-ticket';
 import { verifyLineToken } from '../../backend/src/shared/line-token';
 import {
+  QuotaExceededError,
   createTicket,
   getTicket,
 } from '../../backend/src/shared/ticket-repository';
-import { consumeTicketQuota } from '../../backend/src/shared/rate-limit';
-import { uploadExists } from '../../backend/src/shared/upload-store';
+import { ticketQuotaClaim } from '../../backend/src/shared/rate-limit';
+import { uploadIsImage } from '../../backend/src/shared/upload-store';
 
 const LINE_USER = 'Uabc123';
+const CLAIM = {
+  update: { TableName: 'RateLimits' },
+  retryAfterSeconds: 1234,
+} as unknown as ReturnType<typeof ticketQuotaClaim>;
 const KEY = 'idem-key-0001';
 const validBody = {
   location: 'Beside the lobby elevator',
@@ -89,9 +102,9 @@ describe('POST /tickets (createTicket handler)', () => {
     vi.resetAllMocks();
     vi.mocked(verifyLineToken).mockResolvedValue(LINE_USER);
     vi.mocked(getTicket).mockResolvedValue(null);
-    vi.mocked(uploadExists).mockResolvedValue(true);
+    vi.mocked(uploadIsImage).mockResolvedValue(true);
     vi.mocked(createTicket).mockResolvedValue(undefined);
-    vi.mocked(consumeTicketQuota).mockResolvedValue({ allowed: true });
+    vi.mocked(ticketQuotaClaim).mockReturnValue(CLAIM);
   });
 
   it('stores a RECEIVED ticket and returns a caller-safe 201', async () => {
@@ -128,21 +141,21 @@ describe('POST /tickets (createTicket handler)', () => {
     expect(saved.status).toBe('RECEIVED');
     expect(saved.version).toBe(1);
     expect(saved.photos[0].s3ObjectKey).toBe('uploads/DEFECT/Uabc123/upl_123');
-    expect(uploadExists).toHaveBeenCalledWith('DEFECT', LINE_USER, 'upl_123');
+    expect(uploadIsImage).toHaveBeenCalledWith('DEFECT', LINE_USER, 'upl_123');
   });
 
   describe('rate limit (SR-31)', () => {
-    it('counts one creation for the verified reporter', async () => {
+    it('claims one creation for the verified reporter, written with the ticket', async () => {
       await handler(makeEvent());
-      expect(consumeTicketQuota).toHaveBeenCalledOnce();
-      expect(consumeTicketQuota).toHaveBeenCalledWith(LINE_USER);
+
+      expect(ticketQuotaClaim).toHaveBeenCalledOnce();
+      expect(ticketQuotaClaim).toHaveBeenCalledWith(LINE_USER);
+      expect(createTicket).toHaveBeenCalledOnce();
+      expect(vi.mocked(createTicket).mock.calls[0][1]).toBe(CLAIM);
     });
 
-    it('returns 429 with Retry-After and stores nothing once the limit is used up', async () => {
-      vi.mocked(consumeTicketQuota).mockResolvedValue({
-        allowed: false,
-        retryAfterSeconds: 1234,
-      });
+    it('returns 429 with Retry-After once the limit is used up', async () => {
+      vi.mocked(createTicket).mockRejectedValue(new QuotaExceededError(1234));
       const response = await handler(makeEvent());
 
       expect(response.statusCode).toBe(429);
@@ -151,39 +164,38 @@ describe('POST /tickets (createTicket handler)', () => {
         code: 'RATE_LIMITED',
         requestId: 'req-1',
       });
-      expect(createTicket).not.toHaveBeenCalled();
     });
 
-    it('does not count a replay of an existing ticket', async () => {
+    it('does not claim anything for a replay of an existing ticket', async () => {
       vi.mocked(getTicket).mockResolvedValue(storedRecord());
       await handler(makeEvent());
-      expect(consumeTicketQuota).not.toHaveBeenCalled();
+      expect(ticketQuotaClaim).not.toHaveBeenCalled();
+      expect(createTicket).not.toHaveBeenCalled();
     });
 
     it('still replays when the limit is already used up', async () => {
       vi.mocked(getTicket).mockResolvedValue(storedRecord());
-      vi.mocked(consumeTicketQuota).mockResolvedValue({
-        allowed: false,
-        retryAfterSeconds: 60,
-      });
+      vi.mocked(createTicket).mockRejectedValue(new QuotaExceededError(60));
       const response = await handler(makeEvent());
       expect(response.statusCode).toBe(201);
     });
 
-    it('does not count requests rejected before a ticket would be created', async () => {
+    it('does not claim anything for requests rejected before a ticket would be created', async () => {
       await handler(makeEvent({ body: { ...validBody, location: ' ' } }));
       await handler(makeEvent({ headers: { authorization: undefined } }));
-      vi.mocked(uploadExists).mockResolvedValue(false);
+      vi.mocked(uploadIsImage).mockResolvedValue(false);
       await handler(makeEvent());
-      expect(consumeTicketQuota).not.toHaveBeenCalled();
+      expect(ticketQuotaClaim).not.toHaveBeenCalled();
+      expect(createTicket).not.toHaveBeenCalled();
     });
 
-    it('returns 500 when the counter cannot be updated', async () => {
+    it('returns 500 when the ticket cannot be stored, and there is no separate count to take back', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {});
-      vi.mocked(consumeTicketQuota).mockRejectedValue(new Error('ddb down'));
+      vi.mocked(createTicket).mockRejectedValue(new Error('ddb down'));
       const response = await handler(makeEvent());
+
       expect(response.statusCode).toBe(500);
-      expect(createTicket).not.toHaveBeenCalled();
+      expect(response.body).not.toContain('ddb down');
     });
   });
 
@@ -234,7 +246,7 @@ describe('POST /tickets (createTicket handler)', () => {
   });
 
   it('returns 422 when the upload is not a completed DEFECT upload of this reporter', async () => {
-    vi.mocked(uploadExists).mockResolvedValue(false);
+    vi.mocked(uploadIsImage).mockResolvedValue(false);
     const response = await handler(makeEvent());
     expect(response.statusCode).toBe(422);
     expect(createTicket).not.toHaveBeenCalled();
@@ -247,7 +259,7 @@ describe('POST /tickets (createTicket handler)', () => {
       }),
     );
     expect(response.statusCode).toBe(422);
-    expect(uploadExists).not.toHaveBeenCalled();
+    expect(uploadIsImage).not.toHaveBeenCalled();
   });
 
   it('replays the original ticket for a retry with the same key and payload', async () => {

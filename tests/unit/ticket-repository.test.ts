@@ -6,10 +6,12 @@ vi.mock('../../backend/src/shared/dynamodb-client.js', () => ({
 
 import { ddb } from '../../backend/src/shared/dynamodb-client.js';
 import {
+  QuotaExceededError,
   applyTriage,
   createTicket,
   getTicket,
 } from '../../backend/src/shared/ticket-repository.js';
+import { ticketQuotaClaim } from '../../backend/src/shared/rate-limit.js';
 import type { TriageUpdate } from '../../backend/src/shared/ticket-repository.js';
 import type { TicketRecord } from '../../backend/src/tickets/types.js';
 
@@ -20,6 +22,7 @@ const TABLES = {
   TICKET_REPORTERS_TABLE_NAME: 'TestReporters',
   TICKET_PHOTOS_TABLE_NAME: 'TestPhotos',
   TICKET_EVENTS_TABLE_NAME: 'TestEvents',
+  RATE_LIMITS_TABLE_NAME: 'TestRateLimits',
 };
 
 interface SentItem {
@@ -139,6 +142,89 @@ describe('createTicket', () => {
       .filter((i) => i.Put?.TableName === 'TestPhotos')
       .map((i) => i.Put?.Item?.photoId);
     expect(photoIds).toEqual(['upl_1', 'upl_2']);
+  });
+
+  describe('with a quota claim (SR-31)', () => {
+    const claim = () =>
+      ticketQuotaClaim('Uabc123', new Date('2026-10-28T10:30:00Z'));
+    const cancelled = (codes: string[]) =>
+      Object.assign(new Error('cancelled'), {
+        name: 'TransactionCanceledException',
+        CancellationReasons: codes.map((Code) => ({ Code })),
+      });
+
+    it('counts the creation in the same transaction, after everything else', async () => {
+      await createTicket(record(), claim());
+
+      expect(send).toHaveBeenCalledOnce();
+      const items = transactItems();
+      expect(items).toHaveLength(5);
+      // the ticket is still first, so a duplicate is still reported at index 0
+      expect(items[0].Put?.TableName).toBe('TestTickets');
+      const last = items[4] as { Update?: SentItem };
+      expect(last.Update?.TableName).toBe('TestRateLimits');
+      expect(last.Update?.Key).toEqual({
+        limitKey: 'TICKET_CREATE#Uabc123',
+        windowStart: 1793181600,
+      });
+    });
+
+    it('writes no counter without a claim', async () => {
+      await createTicket(record());
+      expect(transactItems()).toHaveLength(4);
+    });
+
+    it('throws QuotaExceededError with the Retry-After when only the counter refuses', async () => {
+      send.mockRejectedValue(
+        cancelled(['None', 'None', 'None', 'None', 'ConditionalCheckFailed']),
+      );
+
+      await expect(createTicket(record(), claim())).rejects.toMatchObject({
+        name: 'QuotaExceededError',
+        retryAfterSeconds: 1800,
+      });
+      await expect(createTicket(record(), claim())).rejects.toBeInstanceOf(
+        QuotaExceededError,
+      );
+    });
+
+    it('rethrows the duplicate-ticket failure when the ticket already exists, even if the counter also refuses', async () => {
+      const duplicate = cancelled([
+        'ConditionalCheckFailed',
+        'None',
+        'None',
+        'None',
+        'ConditionalCheckFailed',
+      ]);
+      send.mockRejectedValue(duplicate);
+
+      await expect(createTicket(record(), claim())).rejects.toBe(duplicate);
+    });
+
+    it('rethrows any other failure, and a refusal when no claim was made', async () => {
+      const other = cancelled([
+        'None',
+        'None',
+        'None',
+        'None',
+        'ThrottlingError',
+      ]);
+      send.mockRejectedValue(other);
+      await expect(createTicket(record(), claim())).rejects.toBe(other);
+
+      const refused = cancelled([
+        'None',
+        'None',
+        'None',
+        'ConditionalCheckFailed',
+      ]);
+      send.mockRejectedValue(refused);
+      await expect(createTicket(record())).rejects.toBe(refused);
+
+      const plain = new Error('network');
+      send.mockRejectedValue(plain);
+      await expect(createTicket(record(), claim())).rejects.toBe(plain);
+    });
   });
 
   it('fails clearly when a table name is not configured', async () => {

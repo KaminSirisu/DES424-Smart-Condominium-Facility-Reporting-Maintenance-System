@@ -5,6 +5,7 @@ import {
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { ddb } from './dynamodb-client.js';
+import type { TicketQuotaClaim } from './rate-limit.js';
 import { tableName } from './tables.js';
 import {
   Priority,
@@ -178,6 +179,14 @@ export async function getTicket(
   return toTicketRecord(ticket.Item as TicketItem, photos);
 }
 
+/** The reporter has used up the tickets they may create in this hour. */
+export class QuotaExceededError extends Error {
+  constructor(public readonly retryAfterSeconds: number) {
+    super('The ticket creation limit is used up.');
+    this.name = 'QuotaExceededError';
+  }
+}
+
 /**
  * Creates a new ticket together with its reporter association, its photo
  * metadata and its CREATED audit event, all-or-nothing. The ticket Put
@@ -185,39 +194,62 @@ export async function getTicket(
  * cancels the transaction with TransactionCanceledException (reason
  * ConditionalCheckFailed at index 0) — the caller uses this to detect an
  * Idempotency-Key collision and avoid writing a duplicate.
+ *
+ * With a `quota` claim (SR-31, see shared/rate-limit.ts) the reporter's
+ * counter is updated in the same transaction, last. Nothing is counted unless
+ * the ticket is written, and a refused claim throws QuotaExceededError. If the
+ * ticket already exists the original conditional failure is thrown instead, so
+ * a retry of a request that went through still gets its answer.
  */
-export async function createTicket(record: TicketRecord): Promise<void> {
-  await ddb.send(
-    new TransactWriteCommand({
-      TransactItems: [
-        {
-          Put: {
-            TableName: tableName('TICKETS'),
-            Item: toTicketItem(record),
-            ConditionExpression: 'attribute_not_exists(ticketId)',
-          },
-        },
-        {
-          Put: {
-            TableName: tableName('TICKET_REPORTERS'),
-            Item: toReporterItem(record),
-          },
-        },
-        ...record.photos.map((photo) => ({
-          Put: {
-            TableName: tableName('TICKET_PHOTOS'),
-            Item: toPhotoItem(record.id, photo),
-          },
-        })),
-        {
-          Put: {
-            TableName: tableName('TICKET_EVENTS'),
-            Item: toEventItem(toCreatedEvent(record)),
-          },
-        },
-      ],
-    }),
-  );
+export async function createTicket(
+  record: TicketRecord,
+  quota?: TicketQuotaClaim,
+): Promise<void> {
+  const items = [
+    {
+      Put: {
+        TableName: tableName('TICKETS'),
+        Item: toTicketItem(record),
+        ConditionExpression: 'attribute_not_exists(ticketId)',
+      },
+    },
+    {
+      Put: {
+        TableName: tableName('TICKET_REPORTERS'),
+        Item: toReporterItem(record),
+      },
+    },
+    ...record.photos.map((photo) => ({
+      Put: {
+        TableName: tableName('TICKET_PHOTOS'),
+        Item: toPhotoItem(record.id, photo),
+      },
+    })),
+    {
+      Put: {
+        TableName: tableName('TICKET_EVENTS'),
+        Item: toEventItem(toCreatedEvent(record)),
+      },
+    },
+    ...(quota ? [{ Update: quota.update }] : []),
+  ];
+
+  try {
+    await ddb.send(new TransactWriteCommand({ TransactItems: items }));
+  } catch (err) {
+    const reasons =
+      (err as { CancellationReasons?: { Code?: string }[] })
+        .CancellationReasons ?? [];
+    if (
+      quota &&
+      (err as { name?: string }).name === 'TransactionCanceledException' &&
+      reasons[items.length - 1]?.Code === 'ConditionalCheckFailed' &&
+      reasons[0]?.Code !== 'ConditionalCheckFailed'
+    ) {
+      throw new QuotaExceededError(quota.retryAfterSeconds);
+    }
+    throw err;
+  }
 }
 
 export interface TriageUpdate {
