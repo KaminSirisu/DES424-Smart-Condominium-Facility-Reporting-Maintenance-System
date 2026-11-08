@@ -157,6 +157,21 @@ describe('GET /tickets/{ticketId}', () => {
     });
   });
 
+  it('does not match a technician without a team to a ticket without a team', async () => {
+    vi.mocked(requireStaff).mockResolvedValue({
+      accountId: 'x@example.com',
+      role: 'TECHNICIAN',
+      tokenVersion: 0,
+    });
+    vi.mocked(getTicket).mockResolvedValue({
+      ...ticket,
+      status: 'RECEIVED',
+      teamId: undefined,
+    });
+    const response = await handler(event({ identity: technician }));
+    expect(response.statusCode).toBe(404);
+  });
+
   describe('a manager', () => {
     it('reads a ticket of any team', async () => {
       const response = await handler(event({ identity: manager }));

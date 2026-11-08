@@ -25,6 +25,7 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl }));
 import {
   PROOF_PHOTO_MAX_BYTES,
   makeThumbnail,
+  photoAccess,
   proofPhotoTtlSeconds,
   proofPhotoUrl,
   thumbnailObjectKey,
@@ -105,6 +106,12 @@ function fakeS3(objects: Map<string, Buffer>) {
 describe('thumbnailObjectKey', () => {
   it('uses a separate prefix from the uploads', () => {
     expect(thumbnailObjectKey('tkt_1', 'proof_1')).toBe(THUMBNAIL_KEY);
+  });
+
+  it('names the purpose in the key, the repair proof by default', () => {
+    expect(thumbnailObjectKey('tkt_1', 'upl_1', 'DEFECT')).toBe(
+      'thumbnails/DEFECT/tkt_1/upl_1.jpg',
+    );
   });
 });
 
@@ -322,5 +329,72 @@ describe('proofPhotoUrl', () => {
     await expect(proofPhotoUrl(ticket, 'proof_1')).rejects.toThrow(
       'UPLOAD_BUCKET_NAME',
     );
+  });
+});
+
+describe('photoAccess', () => {
+  const DEFECT_KEY = 'thumbnails/DEFECT/tkt_1/upl_1.jpg';
+  const now = new Date('2026-11-06T08:00:00.000Z');
+  let objects: Map<string, Buffer>;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.stubEnv('UPLOAD_BUCKET_NAME', 'uploads-bucket');
+    vi.stubEnv('PROOF_PHOTO_URL_TTL_SECONDS', '');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    objects = new Map();
+    fakeS3(objects);
+    getSignedUrl.mockResolvedValue('https://signed.example/photo?sig=1');
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('gives a link to a re-encoded copy of a defect photo, never to the original', async () => {
+    objects.set('uploads/DEFECT/Uabc123/upl_1', await noisyJpeg(2400, 1600));
+
+    const access = await photoAccess(ticket, 'upl_1', now);
+
+    expect(access).toEqual({
+      url: 'https://signed.example/photo?sig=1',
+      expiresAt: '2026-11-06T08:15:00.000Z',
+    });
+    expect(getSignedUrl.mock.calls[0][1].input).toEqual({
+      Bucket: 'uploads-bucket',
+      Key: DEFECT_KEY,
+    });
+    expect(
+      (await sharp(objects.get(DEFECT_KEY) as Buffer).metadata()).width,
+    ).toBe(1024);
+  });
+
+  it('gives a link to the same copy of the repair proof that the LINE notice uses', async () => {
+    objects.set(THUMBNAIL_KEY, Buffer.from('already made'));
+
+    await expect(photoAccess(ticket, 'proof_1', now)).resolves.toMatchObject({
+      url: 'https://signed.example/photo?sig=1',
+    });
+    expect(getSignedUrl.mock.calls[0][1].input.Key).toBe(THUMBNAIL_KEY);
+  });
+
+  it('reports the lifetime it signed with, at most 15 minutes', async () => {
+    vi.stubEnv('PROOF_PHOTO_URL_TTL_SECONDS', '600');
+    objects.set(DEFECT_KEY, Buffer.from('already made'));
+
+    const access = await photoAccess(ticket, 'upl_1', now);
+
+    expect(getSignedUrl.mock.calls[0][2]).toEqual({ expiresIn: 600 });
+    expect(access?.expiresAt).toBe('2026-11-06T08:10:00.000Z');
+  });
+
+  it('returns null for a photo the ticket does not have', async () => {
+    await expect(photoAccess(ticket, 'nope', now)).resolves.toBeNull();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('returns null when the original is gone or is not an image', async () => {
+    await expect(photoAccess(ticket, 'upl_1', now)).resolves.toBeNull();
+
+    objects.set('uploads/DEFECT/Uabc123/upl_1', Buffer.from('not an image'));
+    await expect(photoAccess(ticket, 'upl_1', now)).resolves.toBeNull();
+    expect(getSignedUrl).not.toHaveBeenCalled();
   });
 });

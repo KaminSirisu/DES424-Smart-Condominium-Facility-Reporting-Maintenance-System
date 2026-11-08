@@ -6,22 +6,27 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import sharp from 'sharp';
-import type { TicketRecord } from '../tickets/types.js';
+import type {
+  PhotoPurpose,
+  StoredTicketPhoto,
+  TicketRecord,
+} from '../tickets/types.js';
 
 /**
- * The repair proof photo as the reporter sees it in the LINE completion
- * notice (SCFRMS-43).
+ * A ticket photo as a person sees it: the repair proof in the LINE completion
+ * notice (SCFRMS-43) and any photo behind GET .../photos/{photoId}/access.
  *
  * LINE shows an image in a Flex Message only when it is an HTTPS JPEG or PNG
  * of at most 1024 by 1024 pixels and about 1 MB, and a phone photo is far
  * bigger. So the original stays untouched in S3 as the record, and a small
  * JPEG copy is made under a separate prefix:
  *
- *   thumbnails/REPAIR_PROOF/<ticketId>/<photoId>.jpg
+ *   thumbnails/<purpose>/<ticketId>/<photoId>.jpg
  *
  * The copy is made once and reused (a retry or the next reporter finds it),
- * and a short-lived signed read URL for it goes into the message. The copy is
- * re-encoded, which also drops the photo's EXIF data such as GPS position.
+ * and a short-lived signed read URL for it goes into the message or the access
+ * response. The copy is re-encoded, which also drops the photo's EXIF data
+ * such as GPS position (SR-22): nobody is given a link to the original.
  *
  * Environment: UPLOAD_BUCKET_NAME (the same bucket as the uploads) and
  * PROOF_PHOTO_URL_TTL_SECONDS (default 900; 60 to 900, because SR-23 allows
@@ -41,8 +46,12 @@ const DEFAULT_TTL_SECONDS = 15 * 60;
 const MIN_TTL_SECONDS = 60;
 const MAX_TTL_SECONDS = 15 * 60;
 
-export function thumbnailObjectKey(ticketId: string, photoId: string): string {
-  return `thumbnails/REPAIR_PROOF/${ticketId}/${photoId}.jpg`;
+export function thumbnailObjectKey(
+  ticketId: string,
+  photoId: string,
+  purpose: PhotoPurpose = 'REPAIR_PROOF',
+): string {
+  return `thumbnails/${purpose}/${ticketId}/${photoId}.jpg`;
 }
 
 function bucketName(): string {
@@ -132,27 +141,21 @@ async function readOriginal(key: string): Promise<Uint8Array | null> {
 }
 
 /**
- * A short-lived signed https URL of the small copy of a ticket's repair proof
- * photo, making the copy first when it does not exist yet. Null when the ticket
- * has no such photo or the file cannot be turned into a small image; S3
- * failures are thrown.
+ * A short-lived signed https URL of the small copy of a ticket photo, making
+ * the copy first when it does not exist yet. Null when the original is gone or
+ * cannot be turned into a small image; S3 failures are thrown.
  */
-export async function proofPhotoUrl(
+async function copyUrl(
   ticket: TicketRecord,
-  photoId: string,
+  photo: StoredTicketPhoto,
 ): Promise<string | null> {
-  const photo = ticket.photos.find(
-    (p) => p.purpose === 'REPAIR_PROOF' && p.id === photoId,
-  );
-  if (!photo) return null;
-
-  const key = thumbnailObjectKey(ticket.id, photo.id);
+  const key = thumbnailObjectKey(ticket.id, photo.id, photo.purpose);
   if (!(await objectExists(key))) {
     const original = await readOriginal(photo.s3ObjectKey);
     if (!original) return null;
     const thumbnail = await makeThumbnail(original);
     if (!thumbnail) {
-      console.error('Proof photo could not be made small enough', {
+      console.error('Ticket photo could not be made small enough', {
         ticketId: ticket.id,
         photoId: photo.id,
       });
@@ -173,4 +176,46 @@ export async function proofPhotoUrl(
     new GetObjectCommand({ Bucket: bucketName(), Key: key }),
     { expiresIn: proofPhotoTtlSeconds() },
   );
+}
+
+/**
+ * The link for the LINE completion notice: the small copy of the ticket's
+ * repair proof photo. Null when the ticket has no such photo or the file cannot
+ * be turned into a small image.
+ */
+export async function proofPhotoUrl(
+  ticket: TicketRecord,
+  photoId: string,
+): Promise<string | null> {
+  const photo = ticket.photos.find(
+    (p) => p.purpose === 'REPAIR_PROOF' && p.id === photoId,
+  );
+  return photo ? copyUrl(ticket, photo) : null;
+}
+
+export interface PhotoAccess {
+  url: string;
+  expiresAt: string;
+}
+
+/**
+ * The read grant of GET .../photos/{photoId}/access for a photo of any purpose
+ * on the ticket. Null when the ticket has no such photo or it cannot be made
+ * viewable. The caller must have checked the caller's right to the ticket.
+ */
+export async function photoAccess(
+  ticket: TicketRecord,
+  photoId: string,
+  now: Date = new Date(),
+): Promise<PhotoAccess | null> {
+  const photo = ticket.photos.find((p) => p.id === photoId);
+  if (!photo) return null;
+  const url = await copyUrl(ticket, photo);
+  if (!url) return null;
+  return {
+    url,
+    expiresAt: new Date(
+      now.getTime() + proofPhotoTtlSeconds() * 1000,
+    ).toISOString(),
+  };
 }
