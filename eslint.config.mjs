@@ -11,7 +11,11 @@ export default tseslint.config(
     languageOptions: { globals: globals.browser },
   },
   {
-    files: ['backend/**/*.ts', 'tests/**/*.ts', 'infrastructure/aws/**/*.ts'],
+    files: [
+      'backend/**/*.ts',
+      'tests/**/*.{ts,mjs}',
+      'infrastructure/aws/**/*.ts',
+    ],
     languageOptions: { globals: globals.node },
   },
 );
