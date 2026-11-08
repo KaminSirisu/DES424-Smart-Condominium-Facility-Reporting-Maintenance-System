@@ -123,6 +123,10 @@ describe('G02 development stack', () => {
     });
     t.resourceCountIs('AWS::Lambda::EventSourceMapping', 2);
     t.resourceCountIs('AWS::SQS::Queue', 2);
+    t.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'des424-g02-scfrms-dev-triage',
+      Timeout: 60,
+    });
     t.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
       BatchSize: 1,
       FunctionResponseTypes: ['ReportBatchItemFailures'],

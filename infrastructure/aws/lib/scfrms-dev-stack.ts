@@ -177,6 +177,7 @@ export class ScfrmsDevStack extends Stack {
       name: string,
       entry: string,
       environment: Record<string, string>,
+      timeout: Duration = Duration.seconds(20),
     ): nodejs.NodejsFunction => {
       const functionName = `${prefix}-${name.toLowerCase()}`;
       return new nodejs.NodejsFunction(this, name, {
@@ -186,7 +187,7 @@ export class ScfrmsDevStack extends Stack {
         depsLockFilePath: path.join(root, 'package-lock.json'),
         runtime: lambda.Runtime.NODEJS_22_X,
         memorySize: 256,
-        timeout: Duration.seconds(20),
+        timeout,
         logGroup: new logs.LogGroup(this, `${name}Logs`, {
           logGroupName: `/aws/lambda/${functionName}`,
           retention: logs.RetentionDays.ONE_WEEK,
@@ -272,10 +273,15 @@ export class ScfrmsDevStack extends Stack {
         throw new Error(
           'enableTriage=true requires -c bedrockModelId=<model ID>.',
         );
-      const triage = fn('Triage', 'triage/triage-handler.ts', {
-        ...tableEnv,
-        BEDROCK_MODEL_ID: modelId,
-      });
+      const triage = fn(
+        'Triage',
+        'triage/triage-handler.ts',
+        {
+          ...tableEnv,
+          BEDROCK_MODEL_ID: modelId,
+        },
+        Duration.seconds(60),
+      );
       triage.addEventSource(
         new sources.DynamoEventSource(tickets, {
           startingPosition: lambda.StartingPosition.LATEST,
