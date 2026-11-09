@@ -165,6 +165,58 @@ describe('G02 development stack', () => {
     expect(actions).not.toContain('dynamodb:PutItem');
   });
 
+  it('gates staff writes and grants only the tables and proof objects they need', () => {
+    expect(() => template({ enableStaffTicketWrites: 'true' })).toThrow(
+      'enableStaffTicketWrites=true requires enableStaffAuth=true.',
+    );
+    expect(() =>
+      template({ enableStaffAuth: 'true', enableStaffTicketWrites: 'true' }),
+    ).toThrow('enableStaffTicketWrites=true requires -c lineLoginChannelId');
+
+    const t = template({
+      enableStaffAuth: 'true',
+      enableStaffTicketWrites: 'true',
+      lineLoginChannelId: '1234567890',
+    });
+    t.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      CorsConfiguration: {
+        AllowMethods: Match.arrayWith(['PATCH']),
+      },
+    });
+    t.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'PATCH /v1/tickets/{ticketId}/status',
+    });
+    for (const name of ['createupload', 'setticketstatus']) {
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        FunctionName: `des424-g02-scfrms-dev-${name}`,
+        Environment: {
+          Variables: Match.objectLike({
+            STAFF_JWT_SECRET_ARN: Match.anyValue(),
+            STAFF_JWT_SECRET: Match.absent(),
+          }),
+        },
+      });
+    }
+    const writePolicies = Object.entries(
+      t.findResources('AWS::IAM::Policy'),
+    ).filter(([id]) => /^(CreateUpload|SetTicketStatus)ServiceRole/.test(id));
+    expect(writePolicies).toHaveLength(2);
+    const actions = writePolicies.flatMap(([, policy]) =>
+      policy.Properties.PolicyDocument.Statement.flatMap(
+        (statement: { Action: string | string[] }) =>
+          Array.isArray(statement.Action)
+            ? statement.Action
+            : [statement.Action],
+      ),
+    );
+    expect(actions).toContain('dynamodb:GetItem');
+    expect(actions).toContain('dynamodb:UpdateItem');
+    expect(actions).toContain('dynamodb:PutItem');
+    expect(actions).toContain('s3:GetObject');
+    expect(actions).not.toContain('dynamodb:Scan');
+    expect(actions).not.toContain('dynamodb:DeleteItem');
+  });
+
   it('wires both stream workers and the ticket route when configured', () => {
     const t = template({
       lineLoginChannelId: '1234567890',

@@ -21,6 +21,7 @@
     "test:smoke:intake": "node tests/smoke/intake.mjs",
     "test:smoke:staff-auth": "node tests/smoke/staff-auth.mjs",
     "test:smoke:staff-ticket-read": "node tests/smoke/staff-ticket-read.mjs",
+    "test:smoke:staff-ticket-status": "node tests/smoke/staff-ticket-status.mjs",
     "build": "npm run build --workspaces",
     "infra:typecheck": "tsc -p infrastructure/aws/tsconfig.json --noEmit",
     "infra:synth": "cd infrastructure/aws && cdk synth",

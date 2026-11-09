@@ -21,8 +21,9 @@ stack in slices; a successful health check is not a working ticket workflow.
 | Foundation    | Group-owned code asset bucket, eight tables, upload bucket, LINE token secret placeholder, API Gateway, and `GET /v1/health` are deployed and verified.                                 | Complete.                                                                                                                                                   |
 | Ticket intake | `POST /uploads` and `POST /tickets` are deployed. A presigned JPEG upload and ticket creation passed a live authenticated smoke test.                                                   | Complete for the backend API. The LIFF app still has a stub submit action.                                                                                  |
 | AI triage     | Tickets stream consumer and Claude Sonnet 5 are deployed. A new ticket moved from `RECEIVED` to `ASSIGNED` with category, priority, team and `triagedAt`.                               | Complete for the tested path. Check CloudWatch logs separately to confirm optional Rekognition photo labelling.                                             |
-| Staff auth    | Login and `/me` Lambda routes, a generated signing secret, and a smoke script are deployed behind `enableStaffAuth=true`. A seeded manager account passed the authenticated smoke test. | Complete for login and `/me`. Staff write actions still need routes and testing.                                                                            |
+| Staff auth    | Login and `/me` Lambda routes, a generated signing secret, and a smoke script are deployed behind `enableStaffAuth=true`. A seeded manager account passed the authenticated smoke test. | Complete for login and `/me`. Technician account provisioning and staff write live tests remain.                                                            |
 | Ticket reads  | `GET /tickets` and `GET /tickets/{ticketId}` are deployed behind `enableStaffTicketReads=true` with specific table and index read permissions.                                          | Manager list and detail smoke passed for a PLUMBING ticket. Reporter, technician, and completed-history paths still need live tests.                        |
+| Staff status  | `PATCH /tickets/{ticketId}/status` and technician proof uploads are prepared behind `enableStaffTicketWrites=true` with scoped IAM permissions and a smoke script.                      | Not deployed. Needs a technician account and a disposable assigned ticket for the live status and proof test.                                               |
 | Notifications | TicketEvents stream consumer, LINE sender, SES sender, and unit tests exist.                                                                                                            | Replace the placeholder LINE secret, verify the SES sender and sandbox recipients or obtain production access, and seed Teams records with email addresses. |
 | Staff portal  | Frontend code exists.                                                                                                                                                                   | Finish its API endpoints and authentication; add ECS/ECR/ALB only if the team chooses that bonus path.                                                      |
 
@@ -53,8 +54,8 @@ cleanup.
 - G02-owned private S3 code asset bucket for CDK Lambda bundles. No ECR repository is created.
 - Eight on-demand DynamoDB tables: `Tickets`, `TicketReporters`, `TicketPhotos`, `TicketEvents`, `Accounts`, `Teams`, `Notifications`, `RateLimits`. Table names start `des424-g02-scfrms-dev-`. `Tickets` and `TicketEvents` have streams; `RateLimits` has TTL on `expiresAt`.
 - Private S3 upload bucket with public access blocked and CORS limited to the existing LIFF Amplify origin (plus an optional admin origin).
-- HTTP API with `GET /v1/health` and coarse stage throttling (10 requests/second, burst 20). `POST /v1/uploads` and `POST /v1/tickets` are added together when the LINE Login channel ID is supplied. Other OpenAPI routes are not deployed in this slice.
-- The first upload Lambda accepts reporter `DEFECT` uploads only. Its small wrapper returns 403 for `REPAIR_PROOF`, because staff login and a shared JWT signing secret are not deployed yet. The staff upload path must be enabled with those routes later.
+- HTTP API with `GET /v1/health` and coarse stage throttling (10 requests/second, burst 20). `POST /v1/uploads` and `POST /v1/tickets` are added together when the LINE Login channel ID is supplied. Staff routes require their respective context flags.
+- Until `enableStaffTicketWrites=true`, the upload Lambda accepts reporter `DEFECT` uploads only; its wrapper returns 403 for `REPAIR_PROOF`. With that flag, the same route also accepts a technician's staff token for `REPAIR_PROOF` and keeps reporter uploads working.
 - Optional stream workers for triage and notifications. Each has partial batch failure handling, three retries, and an SQS failure queue.
 - New stream mappings start at `LATEST`: enabling a worker later processes new events only. Existing `RECEIVED` tickets need an explicit backfill or manual triage plan.
 - Secrets Manager secret for the LINE Messaging API token. The generated initial value is a **placeholder**; update it in Secrets Manager before enabling notifications. The worker fetches it at runtime rather than storing it in Lambda environment variables.
@@ -108,6 +109,26 @@ existing `lineLoginChannelId` context. After deployment, set `STAFF_EMAIL` and
 The manager read test needs an assigned ticket for the named team; it does not
 need a Teams record or LINE Official Account Manager access.
 
+To add technician status changes and repair-proof uploads, pass
+`-c enableStaffTicketWrites=true` together with `enableStaffAuth=true` and
+`lineLoginChannelId`. This adds `PATCH /v1/tickets/{ticketId}/status`, enables
+staff use of the existing `POST /v1/uploads`, and permits PATCH in API CORS.
+Before deploying, preserve the already deployed `enableTriage=true`,
+`bedrockModelId`, and `enableStaffTicketReads=true` context values in the diff
+and deploy commands. The new route needs a seeded technician account for the
+ticket's team; the manager account cannot change status. With a disposable
+assigned ticket and a JPEG proof photo, set the technician's `STAFF_EMAIL` and
+`STAFF_PASSWORD` privately and run:
+
+```sh
+npm run test:smoke:staff-ticket-status -- <disposable-assigned-ticket-id> <jpeg-path>
+```
+
+This test changes that ticket from `ASSIGNED` through `IN_PROGRESS` to `DONE`.
+It checks the proof upload and persisted ticket view. Do not use a real ticket
+that must remain open. Re-run the reporter intake smoke test after enabling the
+shared upload handler to confirm reporter uploads still work.
+
 After deployment, seed the first manager account privately with the backend's
 `seed:accounts` script and test login and `/me` using
 `npm run test:smoke:staff-auth` with `STAFF_EMAIL` and `STAFF_PASSWORD` set in
@@ -130,7 +151,7 @@ Pass the same context values to `infra:diff` and, after review, `infra:deploy`. 
 
 - The backend's `POST /tickets` handler expects API Gateway **payload v2**, so this stack uses HTTP API. HTTP API stage throttling is available, but an AWS WAF web ACL cannot be directly associated with an HTTP API stage. The proposed **per-IP WAF limit** is therefore not implemented here. The DynamoDB per-LINE-user limit remains in the backend. Decide whether to use CloudFront in front of this API or adapt the backend to REST API before claiming the per-IP requirement is met.
 - The LIFF app still submits a stub report; it must call `POST /uploads`, PUT the image to the returned URL, then call `POST /tickets` with the upload ID. The upload route needs the LINE Login channel ID, and the full flow needs a real LINE ID token for testing.
-- Staff login and `/me` are deployed behind `enableStaffAuth=true` and passed an authenticated manager smoke test. Ticket reads are deployed behind `enableStaffTicketReads=true` and passed a manager list/detail smoke test. Staff write handlers and the staff upload path still need API routes and IAM grants. The staff signing secret is generated in Secrets Manager when this flag is enabled.
+- Staff login and `/me` are deployed behind `enableStaffAuth=true` and passed an authenticated manager smoke test. Ticket reads are deployed behind `enableStaffTicketReads=true` and passed a manager list/detail smoke test. Staff status changes and proof uploads are prepared behind `enableStaffTicketWrites=true` but are not yet deployed or live-tested. The staff signing secret is generated in Secrets Manager when staff auth is enabled.
 - The standalone Sonnet 5 call succeeded after removing its deprecated `temperature` parameter, and the live intake-to-Bedrock-to-DynamoDB triage path passed a smoke test. Optional Rekognition photo labelling has not been confirmed from logs; the triage Lambda has a 60-second timeout for both service calls. SES is currently in the Singapore sandbox with zero identities; outgoing work orders cannot be tested until verified.
 - `RateLimits` is incremented before the ticket transaction. A failed transaction can consume a quota slot. Coordinate this with the backend developer before production use.
 - This stack deliberately creates no staff passwords or email addresses. One manager account was seeded manually; team records and technician accounts remain to be seeded.

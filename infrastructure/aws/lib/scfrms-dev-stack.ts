@@ -220,6 +220,7 @@ export class ScfrmsDevStack extends Stack {
         allowMethods: [
           apigwv2.CorsHttpMethod.GET,
           apigwv2.CorsHttpMethod.POST,
+          apigwv2.CorsHttpMethod.PATCH,
           apigwv2.CorsHttpMethod.OPTIONS,
         ],
         allowHeaders: ['authorization', 'content-type', 'idempotency-key'],
@@ -241,12 +242,48 @@ export class ScfrmsDevStack extends Stack {
     });
 
     const lineChannelId = stringContext(this, 'lineLoginChannelId');
+    const staffWrites = enabled(this, 'enableStaffTicketWrites');
+    if (staffWrites && !enabled(this, 'enableStaffAuth')) {
+      throw new Error(
+        'enableStaffTicketWrites=true requires enableStaffAuth=true.',
+      );
+    }
+    if (staffWrites && !lineChannelId) {
+      throw new Error(
+        'enableStaffTicketWrites=true requires -c lineLoginChannelId=<channel ID>.',
+      );
+    }
+    const staffJwt = enabled(this, 'enableStaffAuth')
+      ? new secrets.Secret(this, 'StaffJwtSecret', {
+          secretName: `${prefix}/staff-jwt-signing-key`,
+          generateSecretString: {
+            passwordLength: 64,
+            excludePunctuation: true,
+          },
+        })
+      : undefined;
     if (lineChannelId) {
-      const upload = fn('CreateUpload', 'uploads/reporter-upload.ts', {
-        ...tableEnv,
-        LINE_LOGIN_CHANNEL_ID: lineChannelId,
-      });
+      const upload = fn(
+        'CreateUpload',
+        staffWrites
+          ? 'handlers/create-upload-entry.ts'
+          : 'uploads/reporter-upload.ts',
+        {
+          ...tableEnv,
+          LINE_LOGIN_CHANNEL_ID: lineChannelId,
+          ...(staffWrites ? { STAFF_JWT_SECRET_ARN: staffJwt!.secretArn } : {}),
+        },
+      );
       uploads.grantPut(upload, 'uploads/*');
+      if (staffWrites) {
+        staffJwt!.grantRead(upload);
+        upload.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:GetItem'],
+            resources: [accounts.tableArn],
+          }),
+        );
+      }
       api.addRoutes({
         path: '/v1/uploads',
         methods: [apigwv2.HttpMethod.POST],
@@ -286,14 +323,7 @@ export class ScfrmsDevStack extends Stack {
       }
     }
 
-    if (enabled(this, 'enableStaffAuth')) {
-      const staffJwt = new secrets.Secret(this, 'StaffJwtSecret', {
-        secretName: `${prefix}/staff-jwt-signing-key`,
-        generateSecretString: {
-          passwordLength: 64,
-          excludePunctuation: true,
-        },
-      });
+    if (staffJwt) {
       const staffEnv = {
         ...tableEnv,
         STAFF_JWT_SECRET_ARN: staffJwt.secretArn,
@@ -380,6 +410,53 @@ export class ScfrmsDevStack extends Stack {
           path: '/v1/tickets/{ticketId}',
           methods: [apigwv2.HttpMethod.GET],
           integration: new HttpLambdaIntegration('GetTicketIntegration', get),
+        });
+      }
+
+      if (staffWrites) {
+        const setStatus = fn(
+          'SetTicketStatus',
+          'handlers/set-status-entry.ts',
+          staffEnv,
+        );
+        staffJwt.grantRead(setStatus);
+        setStatus.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:GetItem'],
+            resources: [accounts.tableArn, tickets.tableArn],
+          }),
+        );
+        setStatus.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:Query', 'dynamodb:PutItem'],
+            resources: [photos.tableArn],
+          }),
+        );
+        setStatus.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:UpdateItem'],
+            resources: [tickets.tableArn],
+          }),
+        );
+        setStatus.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:PutItem'],
+            resources: [events.tableArn],
+          }),
+        );
+        setStatus.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['s3:GetObject'],
+            resources: [`${uploads.bucketArn}/uploads/REPAIR_PROOF/*`],
+          }),
+        );
+        api.addRoutes({
+          path: '/v1/tickets/{ticketId}/status',
+          methods: [apigwv2.HttpMethod.PATCH],
+          integration: new HttpLambdaIntegration(
+            'SetTicketStatusIntegration',
+            setStatus,
+          ),
         });
       }
     }
