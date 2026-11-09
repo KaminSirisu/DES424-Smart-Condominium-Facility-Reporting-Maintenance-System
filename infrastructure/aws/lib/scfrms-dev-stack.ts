@@ -78,6 +78,12 @@ export class ScfrmsDevStack extends Stack {
       projectionType: ddb.ProjectionType.ALL,
     });
     tickets.addGlobalSecondaryIndex({
+      indexName: 'TeamDoneIndex',
+      partitionKey: { name: 'teamDoneKey', type: ddb.AttributeType.STRING },
+      sortKey: { name: 'completedKey', type: ddb.AttributeType.STRING },
+      projectionType: ddb.ProjectionType.ALL,
+    });
+    tickets.addGlobalSecondaryIndex({
       indexName: 'CreatedMonthIndex',
       partitionKey: { name: 'createdMonth', type: ddb.AttributeType.STRING },
       sortKey: { name: 'createdKey', type: ddb.AttributeType.STRING },

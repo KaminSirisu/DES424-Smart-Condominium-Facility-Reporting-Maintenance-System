@@ -48,6 +48,13 @@ describe('G02 development stack', () => {
       StreamSpecification: { StreamViewType: 'NEW_IMAGE' },
       GlobalSecondaryIndexes: Match.arrayWith([
         Match.objectLike({ IndexName: 'TeamOpenIndex' }),
+        Match.objectLike({
+          IndexName: 'TeamDoneIndex',
+          KeySchema: [
+            { AttributeName: 'teamDoneKey', KeyType: 'HASH' },
+            { AttributeName: 'completedKey', KeyType: 'RANGE' },
+          ],
+        }),
         Match.objectLike({ IndexName: 'CreatedMonthIndex' }),
       ]),
     });
