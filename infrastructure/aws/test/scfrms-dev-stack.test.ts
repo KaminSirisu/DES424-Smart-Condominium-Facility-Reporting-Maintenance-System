@@ -115,6 +115,39 @@ describe('G02 development stack', () => {
     });
   });
 
+  it('adds staff and reporter ticket reads only with both auth contexts', () => {
+    expect(() => template({ enableStaffTicketReads: 'true' })).toThrow(
+      'enableStaffTicketReads=true requires enableStaffAuth=true.',
+    );
+    expect(() =>
+      template({ enableStaffAuth: 'true', enableStaffTicketReads: 'true' }),
+    ).toThrow('enableStaffTicketReads=true requires -c lineLoginChannelId');
+
+    const t = template({
+      enableStaffAuth: 'true',
+      enableStaffTicketReads: 'true',
+      lineLoginChannelId: '1234567890',
+    });
+    t.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'GET /v1/tickets',
+    });
+    t.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'GET /v1/tickets/{ticketId}',
+    });
+    for (const name of ['listtickets', 'getticket']) {
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        FunctionName: `des424-g02-scfrms-dev-${name}`,
+        Environment: {
+          Variables: Match.objectLike({
+            LINE_LOGIN_CHANNEL_ID: '1234567890',
+            STAFF_JWT_SECRET_ARN: Match.anyValue(),
+            STAFF_JWT_SECRET: Match.absent(),
+          }),
+        },
+      });
+    }
+  });
+
   it('wires both stream workers and the ticket route when configured', () => {
     const t = template({
       lineLoginChannelId: '1234567890',

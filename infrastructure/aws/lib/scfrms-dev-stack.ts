@@ -273,6 +273,19 @@ export class ScfrmsDevStack extends Stack {
       });
     }
 
+    if (enabled(this, 'enableStaffTicketReads')) {
+      if (!enabled(this, 'enableStaffAuth')) {
+        throw new Error(
+          'enableStaffTicketReads=true requires enableStaffAuth=true.',
+        );
+      }
+      if (!lineChannelId) {
+        throw new Error(
+          'enableStaffTicketReads=true requires -c lineLoginChannelId=<channel ID>.',
+        );
+      }
+    }
+
     if (enabled(this, 'enableStaffAuth')) {
       const staffJwt = new secrets.Secret(this, 'StaffJwtSecret', {
         secretName: `${prefix}/staff-jwt-signing-key`,
@@ -305,6 +318,38 @@ export class ScfrmsDevStack extends Stack {
         methods: [apigwv2.HttpMethod.GET],
         integration: new HttpLambdaIntegration('StaffMeIntegration', me),
       });
+
+      if (enabled(this, 'enableStaffTicketReads')) {
+        const readEnv = {
+          ...staffEnv,
+          LINE_LOGIN_CHANNEL_ID: lineChannelId as string,
+        };
+        const list = fn(
+          'ListTickets',
+          'handlers/list-tickets-entry.ts',
+          readEnv,
+        );
+        const get = fn('GetTicket', 'handlers/get-ticket-entry.ts', readEnv);
+        for (const read of [list, get]) {
+          staffJwt.grantRead(read);
+          for (const t of [accounts, tickets, photos, reporters]) {
+            t.grantReadData(read);
+          }
+        }
+        api.addRoutes({
+          path: '/v1/tickets',
+          methods: [apigwv2.HttpMethod.GET],
+          integration: new HttpLambdaIntegration(
+            'ListTicketsIntegration',
+            list,
+          ),
+        });
+        api.addRoutes({
+          path: '/v1/tickets/{ticketId}',
+          methods: [apigwv2.HttpMethod.GET],
+          integration: new HttpLambdaIntegration('GetTicketIntegration', get),
+        });
+      }
     }
 
     if (enabled(this, 'enableTriage')) {
