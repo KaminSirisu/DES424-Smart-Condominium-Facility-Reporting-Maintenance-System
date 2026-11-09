@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node --env-file-if-exists=../.env --import tsx src/local.ts",
     "seed:accounts": "node --env-file-if-exists=../.env --import tsx src/scripts/seed-accounts.ts",
+    "seed:technician": "node --env-file-if-exists=../.env --import tsx src/scripts/seed-technician.ts",
     "rotate:staff-password": "node --env-file-if-exists=../.env --import tsx src/scripts/rotate-disabled-staff-password.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json"

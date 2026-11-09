@@ -116,9 +116,19 @@ staff use of the existing `POST /v1/uploads`, and permits PATCH in API CORS.
 Before deploying, preserve the already deployed `enableTriage=true`,
 `bedrockModelId`, and `enableStaffTicketReads=true` context values in the diff
 and deploy commands. The new route needs a seeded technician account for the
-ticket's team; the manager account cannot change status. With a disposable
-assigned ticket and a JPEG proof photo, set the technician's `STAFF_EMAIL` and
-`STAFF_PASSWORD` privately and run:
+ticket's team; the manager account cannot change status. For a single shared
+PLUMBING login, set `ACCOUNTS_TABLE_NAME` in CloudShell and run:
+
+```sh
+export ACCOUNTS_TABLE_NAME=des424-g02-scfrms-dev-Accounts
+npm run seed:technician -w @scfrms/backend -- --email <plumber-email> --team PLUMBING
+```
+
+Copy the generated password privately. Running the seed again skips an
+existing account without changing its password. The email is a login name;
+this test does not send mail to it. With a disposable assigned PLUMBING ticket
+and a JPEG proof photo, set that technician's `STAFF_EMAIL` and `STAFF_PASSWORD`
+privately and run:
 
 ```sh
 npm run test:smoke:staff-ticket-status -- <disposable-assigned-ticket-id> <jpeg-path>
