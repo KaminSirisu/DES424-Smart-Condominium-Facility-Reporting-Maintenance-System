@@ -7,22 +7,25 @@ it is not a production readiness claim.
 
 ## Deployed slices
 
-| Slice           | Deployed resources and result                                                                                                                                                                                                       |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Foundation      | Group-owned CDK asset bucket, eight on-demand DynamoDB tables, private S3 upload bucket, placeholder LINE Messaging API secret, API Gateway HTTP API, and health Lambda. `GET /v1/health` returned HTTP 200 with `{"status":"ok"}`. |
-| Reporter intake | `POST /v1/uploads` and `POST /v1/tickets` Lambda routes with LINE Login ID-token verification. A real JPEG was uploaded with a presigned S3 URL, then a ticket was created in DynamoDB with status `RECEIVED`.                      |
-| AI triage       | Tickets DynamoDB Stream event source, triage Lambda, CloudWatch log group, and SQS failure queue. A newly inserted ticket was classified and updated to `ASSIGNED`. The worker uses `anthropic.claude-sonnet-5` in Singapore.       |
+| Slice               | Deployed resources and result                                                                                                                                                                                                                                                     |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Foundation          | Group-owned CDK asset bucket, eight on-demand DynamoDB tables, private S3 upload bucket, placeholder LINE Messaging API secret, API Gateway HTTP API, and health Lambda. `GET /v1/health` returned HTTP 200 with `{"status":"ok"}`.                                               |
+| Reporter intake     | `POST /v1/uploads` and `POST /v1/tickets` Lambda routes with LINE Login ID-token verification. A real JPEG was uploaded with a presigned S3 URL, then a ticket was created in DynamoDB with status `RECEIVED`.                                                                    |
+| AI triage           | Tickets DynamoDB Stream event source, triage Lambda, CloudWatch log group, and SQS failure queue. A newly inserted ticket was classified and updated to `ASSIGNED`. The worker uses `anthropic.claude-sonnet-5` in Singapore.                                                     |
+| Staff auth          | `POST /v1/auth/staff/login` and `GET /v1/auth/staff/me` Lambda routes, plus a generated signing secret in Secrets Manager. Live unauthenticated checks returned 400 for an empty login body and 401 for `/me` without a token. An authenticated login is pending account seeding. |
+| Staff history index | `TeamDoneIndex` was added to the Tickets table for completed-ticket queries. The index has not yet been exercised by a live staff API route.                                                                                                                                      |
 
 API base URL: `https://h5ekgxy0j7.execute-api.ap-southeast-1.amazonaws.com/v1`.
-The infrastructure branch deployed for this test was
-`infrastructure/api-intake-readiness` at commit `b52eee3`. Its CDK deployment
+The latest deployed infrastructure branch was
+`infrastructure/api-intake-readiness` at commit `de7d404`. Its CDK deployment
 used these context values:
 
 ```sh
 npm run infra:deploy -- --require-approval never \
   -c lineLoginChannelId=2011904216 \
   -c enableTriage=true \
-  -c bedrockModelId=anthropic.claude-sonnet-5
+  -c bedrockModelId=anthropic.claude-sonnet-5 \
+  -c enableStaffAuth=true
 ```
 
 Pass the same context values on subsequent `infra:diff` and `infra:deploy`
@@ -68,15 +71,20 @@ text if Rekognition photo labelling fails, so this result alone does not prove
 that photo labelling succeeded. The earlier ticket created before the worker
 was enabled remains `RECEIVED` because the stream mapping starts at `LATEST`.
 
+The staff-route checks on 2026-11-09 returned HTTP 200 from `/v1/health`, HTTP
+401 from `/v1/auth/staff/me` without a bearer token, and HTTP 400 from
+`POST /v1/auth/staff/login` with `{}`. These checks confirm routing and basic
+validation, but do not prove that a real staff account can log in yet.
+
 The first attempt with a reused LINE ID token returned HTTP 401. Direct LINE
 verification showed that token had expired. A fresh login and new ID token
 made the same smoke test pass. No token value is stored in this log or in Git.
 
 ## Next deployment gates
 
-- Staff routes and authentication are implemented in the backend but are not
-  wired to the live API. Deploy them with a shared signing secret, seed team and
-  account records, and smoke-test login and authorized ticket operations.
+- Seed the first manager account privately and run the authenticated staff
+  login and `/me` smoke test. Team records and authorized ticket-operation
+  routes remain separate later work.
 - The notification worker is not enabled. Replace the placeholder LINE
   Messaging API token, verify the SES sender and permitted recipients, seed
   team work-order email addresses, then test a newly inserted audit event of
