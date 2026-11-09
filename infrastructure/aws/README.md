@@ -103,6 +103,11 @@ After deployment, seed the first manager account privately with the backend's
 `seed:accounts` script and test login and `/me` using
 `npm run test:smoke:staff-auth` with `STAFF_EMAIL` and `STAFF_PASSWORD` set in
 the shell. The script does not print either the password or the returned token.
+If a generated password is exposed, disable that account and increment its
+`tokenVersion`, then run the backend's `rotate:staff-password` script with
+`--email`. It requires a disabled account, generates a new password, clears
+any lock, reactivates the account, and invalidates older sessions. Keep its
+one-time password output private.
 
 To include notification delivery, first replace the generated LINE secret value, verify an SES sender and the test recipients in Singapore, and add team records with their email addresses. Then provide:
 
