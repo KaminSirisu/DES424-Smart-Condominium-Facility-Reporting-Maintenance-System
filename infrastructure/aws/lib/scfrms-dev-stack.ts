@@ -332,10 +332,42 @@ export class ScfrmsDevStack extends Stack {
         const get = fn('GetTicket', 'handlers/get-ticket-entry.ts', readEnv);
         for (const read of [list, get]) {
           staffJwt.grantRead(read);
-          for (const t of [accounts, tickets, photos, reporters]) {
-            t.grantReadData(read);
-          }
+          read.addToRolePolicy(
+            new iam.PolicyStatement({
+              actions: ['dynamodb:GetItem'],
+              resources: [accounts.tableArn],
+            }),
+          );
         }
+        list.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:BatchGetItem'],
+            resources: [tickets.tableArn],
+          }),
+        );
+        list.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:Query'],
+            resources: [
+              `${tickets.tableArn}/index/TeamOpenIndex`,
+              `${tickets.tableArn}/index/TeamDoneIndex`,
+              `${reporters.tableArn}/index/ReporterTicketsIndex`,
+              photos.tableArn,
+            ],
+          }),
+        );
+        get.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:GetItem'],
+            resources: [tickets.tableArn, reporters.tableArn],
+          }),
+        );
+        get.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:Query'],
+            resources: [photos.tableArn],
+          }),
+        );
         api.addRoutes({
           path: '/v1/tickets',
           methods: [apigwv2.HttpMethod.GET],

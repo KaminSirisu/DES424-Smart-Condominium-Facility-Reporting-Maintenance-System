@@ -146,6 +146,23 @@ describe('G02 development stack', () => {
         },
       });
     }
+    const readPolicies = Object.entries(
+      t.findResources('AWS::IAM::Policy'),
+    ).filter(([id]) => /^(ListTickets|GetTicket)ServiceRole/.test(id));
+    expect(readPolicies).toHaveLength(2);
+    const actions = readPolicies.flatMap(([, policy]) =>
+      policy.Properties.PolicyDocument.Statement.flatMap(
+        (statement: { Action: string | string[] }) =>
+          Array.isArray(statement.Action)
+            ? statement.Action
+            : [statement.Action],
+      ),
+    );
+    expect(actions).toContain('dynamodb:GetItem');
+    expect(actions).toContain('dynamodb:Query');
+    expect(actions).not.toContain('dynamodb:Scan');
+    expect(actions).not.toContain('dynamodb:GetRecords');
+    expect(actions).not.toContain('dynamodb:PutItem');
   });
 
   it('wires both stream workers and the ticket route when configured', () => {
