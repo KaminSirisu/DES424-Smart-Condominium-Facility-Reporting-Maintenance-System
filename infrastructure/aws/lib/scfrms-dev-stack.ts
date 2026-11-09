@@ -273,6 +273,40 @@ export class ScfrmsDevStack extends Stack {
       });
     }
 
+    if (enabled(this, 'enableStaffAuth')) {
+      const staffJwt = new secrets.Secret(this, 'StaffJwtSecret', {
+        secretName: `${prefix}/staff-jwt-signing-key`,
+        generateSecretString: {
+          passwordLength: 64,
+          excludePunctuation: true,
+        },
+      });
+      const staffEnv = {
+        ...tableEnv,
+        STAFF_JWT_SECRET_ARN: staffJwt.secretArn,
+      };
+
+      const login = fn('StaffLogin', 'handlers/staff-login-entry.ts', staffEnv);
+      staffJwt.grantRead(login);
+      accounts.grantReadWriteData(login);
+      teams.grantReadData(login);
+      api.addRoutes({
+        path: '/v1/auth/staff/login',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: new HttpLambdaIntegration('StaffLoginIntegration', login),
+      });
+
+      const me = fn('StaffMe', 'handlers/staff-me-entry.ts', staffEnv);
+      staffJwt.grantRead(me);
+      accounts.grantReadData(me);
+      teams.grantReadData(me);
+      api.addRoutes({
+        path: '/v1/auth/staff/me',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: new HttpLambdaIntegration('StaffMeIntegration', me),
+      });
+    }
+
     if (enabled(this, 'enableTriage')) {
       const modelId = stringContext(this, 'bedrockModelId');
       if (!modelId)

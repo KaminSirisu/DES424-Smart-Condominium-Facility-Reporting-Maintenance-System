@@ -95,6 +95,26 @@ describe('G02 development stack', () => {
     );
   });
 
+  it('adds staff login and me routes with a generated signing secret only when enabled', () => {
+    const t = template({ enableStaffAuth: 'true' });
+    t.resourceCountIs('AWS::SecretsManager::Secret', 2);
+    t.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /v1/auth/staff/login',
+    });
+    t.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'GET /v1/auth/staff/me',
+    });
+    t.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'des424-g02-scfrms-dev-stafflogin',
+      Environment: {
+        Variables: Match.objectLike({
+          STAFF_JWT_SECRET_ARN: Match.anyValue(),
+          STAFF_JWT_SECRET: Match.absent(),
+        }),
+      },
+    });
+  });
+
   it('wires both stream workers and the ticket route when configured', () => {
     const t = template({
       lineLoginChannelId: '1234567890',
