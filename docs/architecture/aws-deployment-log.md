@@ -114,9 +114,16 @@ The script checked technician login, an unauthenticated 401, an idempotent
 `IN_PROGRESS` retry, a presigned S3 proof upload, the `DONE` response, and a
 fresh GET showing the persisted status and proof photo without private fields.
 The test ticket is now `DONE`. The technician password and staff token were not
-recorded. A fresh reporter intake test has not yet been run against the updated
-shared upload Lambda. Separate unauthenticated `DEFECT` and `REPAIR_PROOF`
-upload-intent requests both returned HTTP 401 after the update.
+recorded. Separate unauthenticated `DEFECT` and `REPAIR_PROOF` upload-intent
+requests both returned HTTP 401 after the update. A fresh LINE ID token then
+passed the reporter upload regression check:
+
+```text
+Reporter upload grant passed with a fresh LINE ID token.
+```
+
+This checks the reporter `DEFECT` upload grant after the shared upload Lambda
+was updated for staff proof uploads; it does not create another ticket.
 
 The first attempt with a reused LINE ID token returned HTTP 401. Direct LINE
 verification showed that token had expired. A fresh login and new ID token
@@ -124,10 +131,9 @@ made the same smoke test pass. No token value is stored in this log or in Git.
 
 ## Next deployment gates
 
-- Run `npm run test:smoke:reporter-upload` with a fresh LINE ID token to check
-  the shared upload Lambda after staff proof uploads were enabled. Verify team-scoped reads and
-  the completed-ticket list; deploy and test the remaining staff write routes
-  and photo access. The completed-ticket index has not yet been exercised live.
+- Verify team-scoped reads and the completed-ticket list; deploy and test the
+  remaining staff write routes, reporter reopen, and photo access. The
+  completed-ticket index has not yet been exercised live.
 - Seed Teams records and the other shared team accounts when their names and
   notification email addresses are agreed.
 - The notification worker is not enabled. Replace the placeholder LINE
