@@ -124,8 +124,8 @@ made the same smoke test pass. No token value is stored in this log or in Git.
 
 ## Next deployment gates
 
-- Re-run reporter intake with a fresh LINE ID token to check the shared upload
-  Lambda after staff proof uploads were enabled. Verify team-scoped reads and
+- Run `npm run test:smoke:reporter-upload` with a fresh LINE ID token to check
+  the shared upload Lambda after staff proof uploads were enabled. Verify team-scoped reads and
   the completed-ticket list; deploy and test the remaining staff write routes
   and photo access. The completed-ticket index has not yet been exercised live.
 - Seed Teams records and the other shared team accounts when their names and

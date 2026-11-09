@@ -136,8 +136,10 @@ npm run test:smoke:staff-ticket-status -- <disposable-assigned-ticket-id> <jpeg-
 
 This test changes that ticket from `ASSIGNED` through `IN_PROGRESS` to `DONE`.
 It checks the proof upload and persisted ticket view. Do not use a real ticket
-that must remain open. Re-run the reporter intake smoke test after enabling the
-shared upload handler to confirm reporter uploads still work.
+that must remain open. After enabling the shared upload handler, set a fresh
+`LINE_ID_TOKEN` privately and run `npm run test:smoke:reporter-upload`. That
+check requests an authenticated reporter upload grant without writing another
+ticket or printing the presigned URL.
 
 After deployment, seed the first manager account privately with the backend's
 `seed:accounts` script and test login and `/me` using

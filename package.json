@@ -19,6 +19,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:smoke:intake": "node tests/smoke/intake.mjs",
+    "test:smoke:reporter-upload": "node tests/smoke/reporter-upload.mjs",
     "test:smoke:staff-auth": "node tests/smoke/staff-auth.mjs",
     "test:smoke:staff-ticket-read": "node tests/smoke/staff-ticket-read.mjs",
     "test:smoke:staff-ticket-status": "node tests/smoke/staff-ticket-status.mjs",
