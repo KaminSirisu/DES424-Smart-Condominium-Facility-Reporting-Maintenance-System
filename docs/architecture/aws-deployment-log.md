@@ -14,12 +14,12 @@ it is not a production readiness claim.
 | AI triage           | Tickets DynamoDB Stream event source, triage Lambda, CloudWatch log group, and SQS failure queue. A newly inserted ticket was classified and updated to `ASSIGNED`. The worker uses `anthropic.claude-sonnet-5` in Singapore.                                                      |
 | Staff auth          | `POST /v1/auth/staff/login` and `GET /v1/auth/staff/me` Lambda routes, plus a generated signing secret in Secrets Manager. A seeded manager account passed the authenticated login and `/me` smoke test. Unauthenticated route checks returned the expected 400 and 401 responses. |
 | Ticket reads        | `GET /v1/tickets` and `GET /v1/tickets/{ticketId}` Lambda routes were deployed with specific DynamoDB read permissions. Both returned 401 without a token. A manager session listed the PLUMBING team's tickets and read the known ticket without exposing private fields.         |
+| Staff status        | `PATCH /v1/tickets/{ticketId}/status` and technician `REPAIR_PROOF` uploads were deployed. A PLUMBING technician moved the test ticket from `ASSIGNED` to `IN_PROGRESS` to `DONE`, uploaded a JPEG proof, and read back the persisted result.                                      |
 | Staff history index | `TeamDoneIndex` was added to the Tickets table for completed-ticket queries. The index has not yet been exercised by a live staff API route.                                                                                                                                       |
 
 API base URL: `https://h5ekgxy0j7.execute-api.ap-southeast-1.amazonaws.com/v1`.
-The latest deployed infrastructure branch was
-`infrastructure/api-intake-readiness` at commit `a7faae9`. Its CDK deployment
-used these context values:
+The staff-status deployment used the `infrastructure/api-intake-readiness`
+branch and these CDK context values:
 
 ```sh
 npm run infra:deploy -- --require-approval never \
@@ -27,7 +27,8 @@ npm run infra:deploy -- --require-approval never \
   -c enableTriage=true \
   -c bedrockModelId=anthropic.claude-sonnet-5 \
   -c enableStaffAuth=true \
-  -c enableStaffTicketReads=true
+  -c enableStaffTicketReads=true \
+  -c enableStaffTicketWrites=true
 ```
 
 Pass the same context values on subsequent `infra:diff` and `infra:deploy`
@@ -99,15 +100,36 @@ This proves manager read access to that assigned ticket. Reporter reads,
 technician team restrictions, and completed-ticket history remain untested in
 the live environment.
 
+After the staff-status deployment, `GET /v1/health` returned HTTP 200 and an
+unauthenticated `PATCH /v1/tickets/{ticketId}/status` returned HTTP 401. A
+single PLUMBING technician account was seeded privately. With its credentials
+set only in CloudShell, the status smoke script used the earlier test ticket
+and a JPEG proof photo. It returned:
+
+```text
+Staff status and proof upload passed for tkt_f89feaa654f55c9bbf05ea10a6: ASSIGNED -> IN_PROGRESS -> DONE.
+```
+
+The script checked technician login, an unauthenticated 401, an idempotent
+`IN_PROGRESS` retry, a presigned S3 proof upload, the `DONE` response, and a
+fresh GET showing the persisted status and proof photo without private fields.
+The test ticket is now `DONE`. The technician password and staff token were not
+recorded. A fresh reporter intake test has not yet been run against the updated
+shared upload Lambda. Separate unauthenticated `DEFECT` and `REPAIR_PROOF`
+upload-intent requests both returned HTTP 401 after the update.
+
 The first attempt with a reused LINE ID token returned HTTP 401. Direct LINE
 verification showed that token had expired. A fresh login and new ID token
 made the same smoke test pass. No token value is stored in this log or in Git.
 
 ## Next deployment gates
 
-- Seed team records and technician accounts, then verify team-scoped reads.
-  Deploy and smoke-test the remaining staff ticket write routes and photo
-  access. The completed-ticket index has not yet been exercised live.
+- Re-run reporter intake with a fresh LINE ID token to check the shared upload
+  Lambda after staff proof uploads were enabled. Verify team-scoped reads and
+  the completed-ticket list; deploy and test the remaining staff write routes
+  and photo access. The completed-ticket index has not yet been exercised live.
+- Seed Teams records and the other shared team accounts when their names and
+  notification email addresses are agreed.
 - The notification worker is not enabled. Replace the placeholder LINE
   Messaging API token, verify the SES sender and permitted recipients, seed
   team work-order email addresses, then test a newly inserted audit event of
