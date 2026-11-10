@@ -165,6 +165,51 @@ describe('G02 development stack', () => {
     expect(actions).not.toContain('dynamodb:PutItem');
   });
 
+  it('gates photo access and limits its thumbnail write permission', () => {
+    expect(() => template({ enablePhotoAccess: 'true' })).toThrow(
+      'enablePhotoAccess=true requires enableStaffAuth=true.',
+    );
+    expect(() =>
+      template({ enablePhotoAccess: 'true', enableStaffAuth: 'true' }),
+    ).toThrow('enablePhotoAccess=true requires -c lineLoginChannelId');
+
+    const t = template({
+      enablePhotoAccess: 'true',
+      enableStaffAuth: 'true',
+      lineLoginChannelId: '1234567890',
+    });
+    t.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'GET /v1/tickets/{ticketId}/photos/{photoId}/access',
+    });
+    t.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'des424-g02-scfrms-dev-getphotoaccess',
+      MemorySize: 512,
+      Timeout: 30,
+    });
+    const policies = Object.entries(t.findResources('AWS::IAM::Policy')).filter(
+      ([id]) => /^GetPhotoAccessServiceRole/.test(id),
+    );
+    expect(policies).toHaveLength(1);
+    const statements = policies[0][1].Properties.PolicyDocument.Statement as {
+      Action: string | string[];
+      Resource: unknown;
+    }[];
+    const thumbnailWrite = statements.find(
+      ({ Action }) => Action === 's3:PutObject',
+    );
+    expect(JSON.stringify(thumbnailWrite?.Resource)).toContain('/thumbnails/*');
+    expect(JSON.stringify(thumbnailWrite?.Resource)).not.toContain(
+      '/uploads/*',
+    );
+    const actions = statements.flatMap(({ Action }) => Action);
+    expect(actions).toContain('dynamodb:GetItem');
+    expect(actions).toContain('dynamodb:Query');
+    expect(actions).toContain('s3:GetObject');
+    expect(actions).toContain('s3:PutObject');
+    expect(actions).not.toContain('dynamodb:Scan');
+    expect(actions).not.toContain('s3:DeleteObject');
+  });
+
   it('gates staff writes and grants only the tables and proof objects they need', () => {
     expect(() => template({ enableStaffTicketWrites: 'true' })).toThrow(
       'enableStaffTicketWrites=true requires enableStaffAuth=true.',

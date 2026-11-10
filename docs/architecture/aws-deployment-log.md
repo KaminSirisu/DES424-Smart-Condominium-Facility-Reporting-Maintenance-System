@@ -156,9 +156,9 @@ made the same smoke test pass. No token value is stored in this log or in Git.
 
 - A cross-team ticket-detail check needs a known ticket assigned to another
   team. A different-reporter denial check needs a second LINE account. Deploy
-  and test the remaining staff write routes, reporter reopen, and photo
-  access. The photo-access handler uses native `sharp`; verify that its Linux
-  binary is packaged for Lambda before enabling the route.
+  and test the remaining staff write routes and reporter reopen. Photo access
+  is prepared behind `enablePhotoAccess=true`; verify its Linux Lambda asset,
+  inspect the CDK diff, then deploy and run the photo-access smoke test.
 - Seed Teams records and the other shared team accounts when their names and
   notification email addresses are agreed.
 - The notification worker is not enabled. Replace the placeholder LINE

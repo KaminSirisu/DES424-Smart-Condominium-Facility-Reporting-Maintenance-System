@@ -184,6 +184,7 @@ export class ScfrmsDevStack extends Stack {
       entry: string,
       environment: Record<string, string>,
       timeout: Duration = Duration.seconds(20),
+      options: { memorySize?: number; nodeModules?: string[] } = {},
     ): nodejs.NodejsFunction => {
       const functionName = `${prefix}-${name.toLowerCase()}`;
       return new nodejs.NodejsFunction(this, name, {
@@ -192,7 +193,7 @@ export class ScfrmsDevStack extends Stack {
         handler: 'handler',
         depsLockFilePath: path.join(root, 'package-lock.json'),
         runtime: lambda.Runtime.NODEJS_22_X,
-        memorySize: 256,
+        memorySize: options.memorySize ?? 256,
         timeout,
         logGroup: new logs.LogGroup(this, `${name}Logs`, {
           logGroupName: `/aws/lambda/${functionName}`,
@@ -204,6 +205,7 @@ export class ScfrmsDevStack extends Stack {
           sourceMap: true,
           sourcesContent: false,
           bundleAwsSDK: true,
+          nodeModules: options.nodeModules,
         },
         environment,
       });
@@ -243,6 +245,7 @@ export class ScfrmsDevStack extends Stack {
 
     const lineChannelId = stringContext(this, 'lineLoginChannelId');
     const staffWrites = enabled(this, 'enableStaffTicketWrites');
+    const photoAccessEnabled = enabled(this, 'enablePhotoAccess');
     if (staffWrites && !enabled(this, 'enableStaffAuth')) {
       throw new Error(
         'enableStaffTicketWrites=true requires enableStaffAuth=true.',
@@ -251,6 +254,14 @@ export class ScfrmsDevStack extends Stack {
     if (staffWrites && !lineChannelId) {
       throw new Error(
         'enableStaffTicketWrites=true requires -c lineLoginChannelId=<channel ID>.',
+      );
+    }
+    if (photoAccessEnabled && !enabled(this, 'enableStaffAuth')) {
+      throw new Error('enablePhotoAccess=true requires enableStaffAuth=true.');
+    }
+    if (photoAccessEnabled && !lineChannelId) {
+      throw new Error(
+        'enablePhotoAccess=true requires -c lineLoginChannelId=<channel ID>.',
       );
     }
     const staffJwt = enabled(this, 'enableStaffAuth')
@@ -413,6 +424,56 @@ export class ScfrmsDevStack extends Stack {
         });
       }
 
+      if (photoAccessEnabled) {
+        const photoAccess = fn(
+          'GetPhotoAccess',
+          'tickets/get-photo-access.ts',
+          { ...staffEnv, LINE_LOGIN_CHANNEL_ID: lineChannelId as string },
+          Duration.seconds(30),
+          { memorySize: 512, nodeModules: ['sharp'] },
+        );
+        staffJwt.grantRead(photoAccess);
+        photoAccess.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:GetItem'],
+            resources: [
+              accounts.tableArn,
+              tickets.tableArn,
+              reporters.tableArn,
+            ],
+          }),
+        );
+        photoAccess.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:Query'],
+            resources: [photos.tableArn],
+          }),
+        );
+        photoAccess.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['s3:GetObject'],
+            resources: [
+              `${uploads.bucketArn}/uploads/*`,
+              `${uploads.bucketArn}/thumbnails/*`,
+            ],
+          }),
+        );
+        photoAccess.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['s3:PutObject'],
+            resources: [`${uploads.bucketArn}/thumbnails/*`],
+          }),
+        );
+        api.addRoutes({
+          path: '/v1/tickets/{ticketId}/photos/{photoId}/access',
+          methods: [apigwv2.HttpMethod.GET],
+          integration: new HttpLambdaIntegration(
+            'GetPhotoAccessIntegration',
+            photoAccess,
+          ),
+        });
+      }
+
       if (staffWrites) {
         const setStatus = fn(
           'SetTicketStatus',
@@ -508,13 +569,19 @@ export class ScfrmsDevStack extends Stack {
         throw new Error(
           'enableNotifications=true requires -c sesSenderEmail=<verified address>.',
         );
-      const notify = fn('Notify', 'notifications/notification-handler.ts', {
-        ...tableEnv,
-        SES_SENDER_EMAIL: sender,
-        LINE_CHANNEL_ACCESS_TOKEN_SECRET_ARN: lineToken.secretArn,
-        LIFF_URL: stringContext(this, 'liffUrl') ?? '',
-        ADMIN_DASHBOARD_URL: stringContext(this, 'adminOrigin') ?? '',
-      });
+      const notify = fn(
+        'Notify',
+        'notifications/notification-handler.ts',
+        {
+          ...tableEnv,
+          SES_SENDER_EMAIL: sender,
+          LINE_CHANNEL_ACCESS_TOKEN_SECRET_ARN: lineToken.secretArn,
+          LIFF_URL: stringContext(this, 'liffUrl') ?? '',
+          ADMIN_DASHBOARD_URL: stringContext(this, 'adminOrigin') ?? '',
+        },
+        Duration.seconds(30),
+        { memorySize: 512, nodeModules: ['sharp'] },
+      );
       notify.addEventSource(
         new sources.DynamoEventSource(events, {
           startingPosition: lambda.StartingPosition.LATEST,
