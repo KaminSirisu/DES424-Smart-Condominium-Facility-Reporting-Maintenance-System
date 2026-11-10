@@ -96,8 +96,8 @@ responses for private fields and returned:
 Staff ticket list and detail passed for tkt_f89feaa654f55c9bbf05ea10a6.
 ```
 
-This proves manager read access to that assigned ticket. Reporter reads and
-access to another team's ticket detail remain untested in the live environment.
+This proves manager read access to that assigned ticket. Access to another
+team's ticket detail remains untested in the live environment.
 
 After the staff-status deployment, `GET /v1/health` returned HTTP 200 and an
 unauthenticated `PATCH /v1/tickets/{ticketId}/status` returned HTTP 401. A
@@ -136,16 +136,29 @@ ticket was absent from the open queue, and confirmed HTTP 403 for a
 cross-team list request and HTTP 422 for mixed DONE/ASSIGNED filtering. It
 did not test access to a ticket belonging to another team.
 
+The original reporter then used a fresh LINE Login ID token and ran the
+reporter ticket read smoke test. It returned:
+
+```text
+Reporter ticket list and detail passed for tkt_f89feaa654f55c9bbf05ea10a6.
+```
+
+The test checked that the completed ticket appeared in that reporter's list
+and detail response, that a staff-only team filter returned HTTP 403, and
+that neither response exposed private fields. It did not test whether a
+different LINE user is denied access; that needs a second LINE account.
+
 The first attempt with a reused LINE ID token returned HTTP 401. Direct LINE
 verification showed that token had expired. A fresh login and new ID token
 made the same smoke test pass. No token value is stored in this log or in Git.
 
 ## Next deployment gates
 
-- Run `npm run test:smoke:reporter-ticket-read` with a fresh ID token from the
-  original reporter. A cross-team ticket-detail check needs a known ticket
-  assigned to another team. Deploy and test the remaining staff write routes,
-  reporter reopen, and photo access.
+- A cross-team ticket-detail check needs a known ticket assigned to another
+  team. A different-reporter denial check needs a second LINE account. Deploy
+  and test the remaining staff write routes, reporter reopen, and photo
+  access. The photo-access handler uses native `sharp`; verify that its Linux
+  binary is packaged for Lambda before enabling the route.
 - Seed Teams records and the other shared team accounts when their names and
   notification email addresses are agreed.
 - The notification worker is not enabled. Replace the placeholder LINE
