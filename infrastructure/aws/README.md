@@ -136,7 +136,18 @@ npm run test:smoke:staff-ticket-status -- <disposable-assigned-ticket-id> <jpeg-
 
 This test changes that ticket from `ASSIGNED` through `IN_PROGRESS` to `DONE`.
 It checks the proof upload and persisted ticket view. Do not use a real ticket
-that must remain open. After enabling the shared upload handler, set a fresh
+that must remain open. After that ticket is `DONE`, the same technician can
+check the completed index and team list restrictions without changing ticket
+data:
+
+```sh
+npm run test:smoke:staff-completed-list -- <completed-ticket-id>
+```
+
+This checks the technician's completed list, absence from the open queue,
+cross-team list rejection, and invalid mixed-status rejection. It does not
+test access to another team's ticket detail; that needs a known ticket from
+another team. After enabling the shared upload handler, set a fresh
 `LINE_ID_TOKEN` privately and run `npm run test:smoke:reporter-upload`. That
 check requests an authenticated reporter upload grant without writing another
 ticket or printing the presigned URL.
