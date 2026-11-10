@@ -16,10 +16,10 @@ it is not a production readiness claim.
 | Ticket reads        | `GET /v1/tickets` and `GET /v1/tickets/{ticketId}` Lambda routes were deployed with specific DynamoDB read permissions. Both returned 401 without a token. A manager session listed the PLUMBING team's tickets and read the known ticket without exposing private fields.         |
 | Staff status        | `PATCH /v1/tickets/{ticketId}/status` and technician `REPAIR_PROOF` uploads were deployed. A PLUMBING technician moved the test ticket from `ASSIGNED` to `IN_PROGRESS` to `DONE`, uploaded a JPEG proof, and read back the persisted result.                                      |
 | Staff history index | `TeamDoneIndex` was added to the Tickets table for completed-ticket queries. The PLUMBING technician's completed-list smoke test found the DONE ticket through the API.                                                                                                            |
-| Photo access        | `GET /v1/tickets/{ticketId}/photos/{photoId}/access` and a Lambda bundle containing native `sharp` were deployed. The first live reporter smoke test returned HTTP 500; a fix is prepared and awaits redeployment and retest.                                                      |
+| Photo access        | `GET /v1/tickets/{ticketId}/photos/{photoId}/access` and a Lambda bundle containing native `sharp` were deployed. After correcting secret bootstrap and S3 lookup, the original reporter's live photo-access smoke test passed.                                                    |
 
 API base URL: `https://h5ekgxy0j7.execute-api.ap-southeast-1.amazonaws.com/v1`.
-The staff-status deployment used the `infrastructure/api-intake-readiness`
+The current deployment used the `infrastructure/api-intake-readiness`
 branch and these CDK context values:
 
 ```sh
@@ -29,7 +29,8 @@ npm run infra:deploy -- --require-approval never \
   -c bedrockModelId=anthropic.claude-sonnet-5 \
   -c enableStaffAuth=true \
   -c enableStaffTicketReads=true \
-  -c enableStaffTicketWrites=true
+  -c enableStaffTicketWrites=true \
+  -c enablePhotoAccess=true
 ```
 
 Pass the same context values on subsequent `infra:diff` and `infra:deploy`
@@ -160,15 +161,23 @@ directly, skipping the Secrets Manager bootstrap used by the other mixed
 staff/reporter routes. The correction uses a bootstrap entry point. The photo
 helper also now checks for a missing thumbnail through a prefix-scoped S3 list
 operation, which avoids a 403 from `HeadObject` on a missing key without broad
-bucket-list permission. These changes still need a live redeploy and smoke test.
+bucket-list permission. After deploying commit `3d20fa8`, the first retry
+returned HTTP 401 because the reporter's LINE ID token had expired. With a
+fresh ID token from the original reporter, the smoke test returned:
+
+```text
+Reporter photo access passed for tkt_f89feaa654f55c9bbf05ea10a6.
+```
+
+The script checked ticket detail, unauthenticated rejection, a signed defect
+photo URL, the fetched JPEG's size, dimensions and absent EXIF, and missing
+photo handling. The token and signed URL were not recorded.
 
 ## Next deployment gates
 
 - A cross-team ticket-detail check needs a known ticket assigned to another
   team. A different-reporter denial check needs a second LINE account. Deploy
-  and test the remaining staff write routes and reporter reopen. Redeploy the
-  corrected photo Lambda with `enablePhotoAccess=true`, then rerun the photo
-  access smoke test with a fresh original reporter LINE ID token.
+  and test the remaining staff write routes and reporter reopen.
 - Seed Teams records and the other shared team accounts when their names and
   notification email addresses are agreed.
 - The notification worker is not enabled. Replace the placeholder LINE

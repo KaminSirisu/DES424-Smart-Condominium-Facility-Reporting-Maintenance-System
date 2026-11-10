@@ -24,7 +24,7 @@ stack in slices; a successful health check is not a working ticket workflow.
 | Staff auth    | Login and `/me` Lambda routes, a generated signing secret, and a smoke script are deployed behind `enableStaffAuth=true`. A seeded manager account passed the authenticated smoke test. | Manager login and `/me` passed; PLUMBING technician login passed in the status smoke test. Other team accounts remain to be seeded.                              |
 | Ticket reads  | `GET /tickets` and `GET /tickets/{ticketId}` are deployed behind `enableStaffTicketReads=true` with specific table and index read permissions.                                          | Manager, technician completed-list, and original reporter read smoke tests passed for a PLUMBING ticket. Cross-team detail and second-reporter denial remain.    |
 | Staff status  | `PATCH /tickets/{ticketId}/status` and technician proof uploads are deployed behind `enableStaffTicketWrites=true` with scoped IAM permissions.                                         | PLUMBING smoke passed: assigned ticket moved through `IN_PROGRESS` to `DONE` with a JPEG proof. Reporter upload grant regression passed with a fresh LINE token. |
-| Photo access  | The route and native `sharp` bundle were deployed behind `enablePhotoAccess=true`. The initial smoke test returned HTTP 500 because the Lambda skipped staff-secret bootstrap.          | The bootstrap and scoped S3 object lookup fixes are prepared. Redeploy and rerun the reporter photo-access smoke test.                                           |
+| Photo access  | The route and native `sharp` bundle were deployed behind `enablePhotoAccess=true`. The Lambda now loads the staff secret and checks S3 objects with scoped list access.                 | The original reporter's live photo-access smoke test passed after deploying commit `3d20fa8`.                                                                    |
 | Notifications | TicketEvents stream consumer, LINE sender, SES sender, and unit tests exist.                                                                                                            | Replace the placeholder LINE secret, verify the SES sender and sandbox recipients or obtain production access, and seed Teams records with email addresses.      |
 | Staff portal  | Frontend code exists.                                                                                                                                                                   | Finish its API endpoints and authentication; add ECS/ECR/ALB only if the team chooses that bonus path.                                                           |
 
@@ -165,12 +165,12 @@ rejects a staff-only team filter, and checks that no private fields appear in
 the responses. It does not prove that a different reporter is denied; that
 requires a second LINE account.
 
-To add `GET /v1/tickets/{ticketId}/photos/{photoId}/access`, deploy from Linux
-x64 CloudShell: the `sharp` native module is installed for the build machine's
-platform. Do not deploy this slice from a macOS-generated CDK asset. Preserve
-every existing CDK context value and add `-c enablePhotoAccess=true` to both
-`infra:diff` and `infra:deploy`. Before deploying, synthesize with those same
-values and check the resulting package:
+For subsequent changes to `GET /v1/tickets/{ticketId}/photos/{photoId}/access`,
+deploy from Linux x64 CloudShell: the `sharp` native module is installed for
+the build machine's platform. Do not deploy this slice from a macOS-generated
+CDK asset. Preserve every existing CDK context value, including
+`-c enablePhotoAccess=true`, on both `infra:diff` and `infra:deploy`. Before
+deploying, synthesize with those same values and check the resulting package:
 
 ```sh
 npm run infra:synth -- -c lineLoginChannelId=2011904216 \
@@ -182,10 +182,10 @@ npm run infra:check:photo-asset
 
 The check loads `sharp` from the actual synthesized photo Lambda asset and
 creates a JPEG with its Linux x64 binary. If it fails or CloudShell has too
-little disk space, stop before deployment. The expected CDK diff adds one
-Lambda, its log group and scoped IAM permissions, one API integration and one
-route. After deployment, use a fresh `LINE_ID_TOKEN` from the reporter who
-created the known ticket and run:
+little disk space, stop before deployment. In a new stack, enabling this slice
+adds one Lambda, its log group and scoped IAM permissions, one API integration,
+and one route. After deployment, use a fresh `LINE_ID_TOKEN` from the reporter
+who created the known ticket and run:
 
 ```sh
 npm run test:smoke:photo-access -- <completed-ticket-id>
@@ -218,7 +218,7 @@ Pass the same context values to `infra:diff` and, after review, `infra:deploy`. 
 
 - The backend's `POST /tickets` handler expects API Gateway **payload v2**, so this stack uses HTTP API. HTTP API stage throttling is available, but an AWS WAF web ACL cannot be directly associated with an HTTP API stage. The proposed **per-IP WAF limit** is therefore not implemented here. The DynamoDB per-LINE-user limit remains in the backend. Decide whether to use CloudFront in front of this API or adapt the backend to REST API before claiming the per-IP requirement is met.
 - The LIFF app still submits a stub report; it must call `POST /uploads`, PUT the image to the returned URL, then call `POST /tickets` with the upload ID. The upload route needs the LINE Login channel ID, and the full flow needs a real LINE ID token for testing.
-- Staff login and `/me` are deployed behind `enableStaffAuth=true` and passed an authenticated manager smoke test. Ticket reads are deployed behind `enableStaffTicketReads=true` and passed manager, technician completed-list, and original reporter read smoke tests. Staff status changes and proof uploads are deployed behind `enableStaffTicketWrites=true`; a PLUMBING technician completed an assigned test ticket with a JPEG proof. The reporter upload grant regression passed; cross-team ticket detail and second-reporter denial still need live checks. Photo access is prepared but not deployed. The staff signing secret is generated in Secrets Manager when staff auth is enabled.
+- Staff login and `/me` are deployed behind `enableStaffAuth=true` and passed an authenticated manager smoke test. Ticket reads are deployed behind `enableStaffTicketReads=true` and passed manager, technician completed-list, and original reporter read smoke tests. Staff status changes and proof uploads are deployed behind `enableStaffTicketWrites=true`; a PLUMBING technician completed an assigned test ticket with a JPEG proof. The reporter upload grant regression and photo access passed; cross-team ticket detail and second-reporter denial still need live checks. The staff signing secret is generated in Secrets Manager when staff auth is enabled.
 - The standalone Sonnet 5 call succeeded after removing its deprecated `temperature` parameter, and the live intake-to-Bedrock-to-DynamoDB triage path passed a smoke test. Optional Rekognition photo labelling has not been confirmed from logs; the triage Lambda has a 60-second timeout for both service calls. SES is currently in the Singapore sandbox with zero identities; outgoing work orders cannot be tested until verified.
 - `RateLimits` is incremented before the ticket transaction. A failed transaction can consume a quota slot. Coordinate this with the backend developer before production use.
 - This stack deliberately creates no staff passwords or email addresses. One manager account was seeded manually; team records and technician accounts remain to be seeded.
