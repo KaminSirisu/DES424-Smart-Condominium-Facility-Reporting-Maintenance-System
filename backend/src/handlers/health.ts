@@ -10,7 +10,8 @@ type HealthResult = {
 };
 
 export function routeHealth(method: string, path: string): HealthResult {
-  const found = method === 'GET' && path === '/health';
+  const found =
+    method === 'GET' && (path === '/health' || path === '/v1/health');
 
   return {
     statusCode: found ? 200 : 404,

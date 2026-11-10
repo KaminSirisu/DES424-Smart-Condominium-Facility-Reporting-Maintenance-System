@@ -17,8 +17,6 @@ tags:
     description: Manager counts and historical analysis.
   - name: Staff auth
     description: Proposed staff session contract pending security review.
-  - name: Internal
-    description: Trusted worker contract, never available to browsers.
 paths:
   /health:
     get:
@@ -42,9 +40,14 @@ paths:
       tags: [Uploads]
       summary: Request a short-lived image upload URL
       description: >-
-        Reporters may request DEFECT uploads; authorized staff may request
-        REPAIR_PROOF uploads. A later ticket action verifies the uploaded object,
-        its purpose, and its owner before accepting the uploadId.
+        A reporter requests DEFECT uploads with a LINE token; a technician
+        requests REPAIR_PROOF uploads with a staff token. A manager gets 403,
+        because only a technician can finish a job. The URL is a presigned PUT
+        that expires after 5 minutes and is signed for exactly the requested
+        content type and size: send the file with the returned method and
+        headers. The image must be JPEG, PNG or WebP of at most 10 MB, otherwise
+        422. A later ticket action verifies the uploaded object, its purpose, and
+        its owner before accepting the uploadId.
       operationId: createUploadIntent
       security:
         - lineToken: []
@@ -72,8 +75,14 @@ paths:
       summary: List tickets visible to the caller
       description: >-
         Reporter results are restricted to that verified LINE identity, including
-        associations retained after a merge. Staff may use filters within their
-        authorized scope. A ticket ID or filter never bypasses authorization.
+        associations retained after a merge, newest first. A technician sees
+        their team's tickets: ASSIGNED and IN_PROGRESS (the default) oldest
+        first, or DONE alone newest completion first. A manager must name the
+        team with teamId. Staff can list only ASSIGNED, IN_PROGRESS or DONE
+        tickets, and DONE cannot be combined with another status (422). A page
+        can hold fewer tickets than limit while nextCursor is present, because
+        filters are applied after the index is read; send nextCursor back as it
+        is. A ticket ID or filter never bypasses authorization.
       operationId: listTickets
       security:
         - lineToken: []
@@ -83,23 +92,34 @@ paths:
         - $ref: '#/components/parameters/Limit'
         - in: query
           name: status
+          description: Repeat the parameter to ask for several statuses.
+          style: form
+          explode: true
           schema:
-            $ref: '#/components/schemas/TicketStatus'
+            type: array
+            items:
+              $ref: '#/components/schemas/TicketStatus'
         - in: query
           name: location
           description: Match the reporter-entered location text exactly.
           schema: { type: string }
         - in: query
           name: teamId
-          description: Staff filter only.
+          description: >-
+            Staff filter only (a reporter gets 403). A technician may give only
+            their own team (another is 403); a manager must give one.
           schema: { type: string }
         - in: query
           name: completedFrom
-          description: Staff-only lower bound for completedAt, inclusive.
+          description: >-
+            Staff-only lower bound for completedAt, inclusive, as a UTC date.
+            Needs status=DONE.
           schema: { type: string, format: date }
         - in: query
           name: completedTo
-          description: Staff-only upper bound for completedAt, inclusive.
+          description: >-
+            Staff-only upper bound for completedAt, inclusive, as a UTC date.
+            Needs status=DONE.
           schema: { type: string, format: date }
       responses:
         '200':
@@ -108,8 +128,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TicketPage'
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
     post:
       tags: [Tickets]
       summary: Submit a facility defect report
@@ -157,6 +179,9 @@ paths:
       tags: [Tickets]
       summary: Get a ticket visible to the caller
       description: >-
+        A technician sees the tickets of their team, a manager sees every
+        ticket, and a reporter sees the tickets they reported. A ticket outside
+        the caller's scope answers 404, the same as a ticket that does not exist.
         A merged source remains discoverable by an associated reporter and
         includes mergedIntoTicketId. Raw LINE IDs and S3 keys are never returned.
       operationId: getTicket
@@ -185,9 +210,12 @@ paths:
       description: >-
         The ticket view lists caller-visible photo metadata. An associated
         reporter may view their own defect photo and repair proof on an
-        associated ticket; authorized staff may view photos within their work
-        scope. The backend checks access before issuing a short-lived read URL.
-        Raw S3 keys are never returned.
+        associated ticket; a technician may view photos of their team's
+        tickets and a manager any photo. The backend checks access before
+        issuing a short-lived read URL (15 minutes at most) that points to a
+        re-encoded JPEG copy without EXIF metadata, never to the original.
+        A ticket outside the caller's scope answers 403; an unknown ticket or
+        photo answers 404. Raw S3 keys are never returned.
       operationId: getTicketPhotoAccess
       security:
         - lineToken: []
@@ -233,7 +261,8 @@ paths:
       description: >-
         A technician on the assigned team or a manager may change priority.
         The backend records the actor, previous value, new value, reason, and
-        time. AI classification cannot overwrite a later staff choice.
+        time, and sets prioritySetBy to STAFF. AI classification cannot
+        overwrite a later staff choice.
       operationId: setTicketPriority
       security:
         - staffToken: []
@@ -255,32 +284,6 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /tickets/{ticketId}/accept:
-    parameters:
-      - $ref: '#/components/parameters/TicketId'
-    post:
-      tags: [Tickets]
-      summary: Accept an assigned team ticket as a technician
-      description: >-
-        Only a technician on the assigned team may accept an ASSIGNED ticket.
-        Acceptance records acceptedByStaffId and acceptedAt without changing
-        status. A ticket already accepted by another technician conflicts.
-      operationId: acceptTicket
-      security:
-        - staffToken: []
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-      responses:
-        '200':
-          description: Ticket accepted and audited.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Ticket'
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
   /tickets/{ticketId}/assignment:
     parameters:
       - $ref: '#/components/parameters/TicketId'
@@ -288,9 +291,8 @@ paths:
       tags: [Tickets]
       summary: Reassign an unstarted ticket to another team
       description: >-
-        Manager only. Reassignment is allowed while ASSIGNED, including after
-        technician acceptance but before work starts. It clears the prior
-        acceptance and records the old team, new team, actor, reason, and time.
+        Manager only. Reassignment is allowed while ASSIGNED, before work
+        starts. It records the old team, new team, actor, reason, and time.
         Reassigning IN_PROGRESS work needs a separate exception policy.
       operationId: reassignTicket
       security:
@@ -321,8 +323,9 @@ paths:
       tags: [Tickets]
       summary: Start or finish repair work
       description: >-
-        An accepting technician on the assigned team moves ASSIGNED ->
-        IN_PROGRESS -> DONE. DONE requires a verified REPAIR_PROOF upload.
+        A technician on the assigned team moves ASSIGNED -> IN_PROGRESS ->
+        DONE. Acceptance is by team, not by person: every technician of a team
+        shares one account. DONE requires a verified REPAIR_PROOF upload.
         Completion queues a reporter notification. A manager status override,
         if needed, requires a separate exception policy.
       operationId: setTicketStatus
@@ -384,14 +387,20 @@ paths:
       tags: [Tickets]
       summary: Merge duplicate tickets into this ticket as a technician
       description: >-
-        An authorized technician confirms the same physical problem after
-        reviewing the reported free-text locations and issue details; matching
-        location text alone does not establish a duplicate. The technician must
-        have access to the canonical and source tickets; cross-team merge rules
-        still need approval. Source tickets become MERGED and point to this
+        A technician of the assigned team confirms the same physical problem
+        after reviewing the reported free-text locations and issue details;
+        matching location text alone does not establish a duplicate. The
+        canonical ticket and every source must belong to the technician's team
+        (403 otherwise; a manager cannot merge) and be ASSIGNED or IN_PROGRESS
+        (409 otherwise). Source tickets become MERGED and point to this
         canonical ticket. Their original reports, photos, and audit history
         remain on those records. All source reporter associations are retained
-        on the canonical ticket.
+        on the canonical ticket, and each source's reporters are notified. The
+        canonical ticket takes the highest priority of the merged tickets and a
+        deadline counted from the earliest creation time. At most 10 sources;
+        422 for an unknown source, a ticket merged into itself, or too many
+        sources or reporters. Repeating a merge that already happened returns
+        200.
       operationId: mergeTickets
       security:
         - staffToken: []
@@ -524,33 +533,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/StaffProfile'
         '401': { $ref: '#/components/responses/Unauthorized' }
-  /internal/tickets/{ticketId}/classification:
-    parameters:
-      - $ref: '#/components/parameters/TicketId'
-    post:
-      tags: [Internal]
-      summary: Record AI classification suggestions from a trusted worker
-      description: >-
-        Proposed internal-only callback to satisfy SCFRMS-31. An event or direct
-        Lambda invocation may replace HTTP. Backend code validates AI suggestions
-        and updates the stored ticket; Bedrock does not write to DynamoDB.
-        Never expose this route to clients.
-      operationId: applyClassification
-      x-internal: true
-      security:
-        - serviceIam: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ClassificationResult'
-      responses:
-        '204': { description: Suggestions recorded and routing initiated. }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
 components:
   securitySchemes:
     lineToken:
@@ -561,11 +543,6 @@ components:
       type: http
       scheme: bearer
       description: Staff credential with backend role checks; session design is pending review.
-    serviceIam:
-      type: apiKey
-      in: header
-      name: Authorization
-      description: Internal AWS-signed authorization placeholder; never a client token.
   parameters:
     TicketId:
       in: path
@@ -619,6 +596,10 @@ components:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
     TooManyRequests:
       description: Caller exceeded a rate limit.
+      headers:
+        Retry-After:
+          description: Seconds until the caller may try again.
+          schema: { type: integer }
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -673,13 +654,13 @@ components:
           { type: string, description: Maintenance domain after triage. }
         suggestedPriority: { $ref: '#/components/schemas/Priority' }
         priority: { $ref: '#/components/schemas/Priority' }
-        teamId: { type: string }
-        acceptedByStaffId:
+        prioritySetBy:
           type: string
+          enum: [AI, STAFF]
           description: >-
-            Staff-visible only; present after a technician accepts the current
-            assignment.
-        acceptedAt: { type: string, format: date-time }
+            Who decided priority: AI for the automatic triage, STAFF after a
+            technician or manager changes it.
+        teamId: { type: string }
         photos:
           type: array
           description: >-
@@ -728,9 +709,14 @@ components:
         contentType:
           {
             type: string,
-            description: Allowed image MIME type; exact list is open.,
+            description: 'One of image/jpeg, image/png or image/webp.',
           }
-        sizeBytes: { type: integer, minimum: 1 }
+        sizeBytes:
+          {
+            type: integer,
+            minimum: 1,
+            description: 'Exact size of the file in bytes; at most 10485760 (10 MB).',
+          }
     UploadGrant:
       type: object
       required: [uploadId, uploadUrl, method, headers, expiresAt]
@@ -798,6 +784,7 @@ components:
         sourceTicketIds:
           type: array
           minItems: 1
+          maxItems: 10
           uniqueItems: true
           items: { type: string }
     TicketEvent:
@@ -810,10 +797,18 @@ components:
       properties:
         id: { type: string }
         ticketId: { type: string }
-        kind: { type: string }
+        kind:
+          type: string
+          description: >-
+            Written so far: CREATED, TRIAGED, STATUS_CHANGED, MERGED (on a
+            merged source) and DUPLICATES_MERGED (on the canonical ticket).
+            STATUS_CHANGED and MERGED carry fromStatus and toStatus.
         occurredAt: { type: string, format: date-time }
         actorType: { type: string, enum: [REPORTER, STAFF, SYSTEM] }
         actorStaffId: { type: string }
+        actorTeamId:
+          type: string
+          description: Team of the technician account that acted; not set for a manager.
         fromStatus: { $ref: '#/components/schemas/TicketStatus' }
         toStatus: { $ref: '#/components/schemas/TicketStatus' }
         fromPriority: { $ref: '#/components/schemas/Priority' }
@@ -942,11 +937,6 @@ components:
         name: { type: string }
         role: { type: string, enum: [TECHNICIAN, MANAGER] }
         teamId: { type: string }
-    ClassificationResult:
-      type: object
-      additionalProperties: false
-      required: [category, suggestedPriority, suggestedTeamId]
-      properties:
-        category: { type: string }
-        suggestedPriority: { $ref: '#/components/schemas/Priority' }
-        suggestedTeamId: { type: string }
+        teamName:
+          type: string
+          description: Display name of the team; present for a technician when the team has one.

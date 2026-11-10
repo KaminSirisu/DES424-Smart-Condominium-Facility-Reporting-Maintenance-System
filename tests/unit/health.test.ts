@@ -10,6 +10,10 @@ describe('health route', () => {
     expect(JSON.parse(response.body ?? '')).toEqual({ status: 'ok' });
   });
 
+  it('accepts the versioned API Gateway path', () => {
+    expect(routeHealth('GET', '/v1/health').statusCode).toBe(200);
+  });
+
   it('rejects other routes and methods', () => {
     expect(routeHealth('POST', '/health').statusCode).toBe(404);
     expect(routeHealth('GET', '/tickets').statusCode).toBe(404);

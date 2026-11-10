@@ -3,7 +3,7 @@ import tseslint from 'typescript-eslint';
 import globals from 'globals';
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/coverage/**'] },
+  { ignores: ['**/dist/**', '**/coverage/**', '**/cdk.out/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -11,7 +11,11 @@ export default tseslint.config(
     languageOptions: { globals: globals.browser },
   },
   {
-    files: ['backend/**/*.ts', 'tests/**/*.ts'],
+    files: ['backend/**/*.ts', 'tests/**/*.ts', 'infrastructure/aws/**/*.ts'],
+    languageOptions: { globals: globals.node },
+  },
+  {
+    files: ['tests/smoke/**/*.mjs'],
     languageOptions: { globals: globals.node },
   },
 );
