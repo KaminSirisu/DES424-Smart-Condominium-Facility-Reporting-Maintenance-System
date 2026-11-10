@@ -22,7 +22,7 @@ stack in slices; a successful health check is not a working ticket workflow.
 | Ticket intake | `POST /uploads` and `POST /tickets` are deployed. A presigned JPEG upload and ticket creation passed a live authenticated smoke test.                                                   | Complete for the backend API. The LIFF app still has a stub submit action.                                                                                       |
 | AI triage     | Tickets stream consumer and Claude Sonnet 5 are deployed. A new ticket moved from `RECEIVED` to `ASSIGNED` with category, priority, team and `triagedAt`.                               | Complete for the tested path. Check CloudWatch logs separately to confirm optional Rekognition photo labelling.                                                  |
 | Staff auth    | Login and `/me` Lambda routes, a generated signing secret, and a smoke script are deployed behind `enableStaffAuth=true`. A seeded manager account passed the authenticated smoke test. | Manager login and `/me` passed; PLUMBING technician login passed in the status smoke test. Other team accounts remain to be seeded.                              |
-| Ticket reads  | `GET /tickets` and `GET /tickets/{ticketId}` are deployed behind `enableStaffTicketReads=true` with specific table and index read permissions.                                          | Manager list and detail smoke passed for a PLUMBING ticket. Reporter, technician, and completed-history paths still need live tests.                             |
+| Ticket reads  | `GET /tickets` and `GET /tickets/{ticketId}` are deployed behind `enableStaffTicketReads=true` with specific table and index read permissions.                                          | Manager list/detail and technician completed-list smoke tests passed for a PLUMBING ticket. Reporter read and cross-team detail checks remain.                   |
 | Staff status  | `PATCH /tickets/{ticketId}/status` and technician proof uploads are deployed behind `enableStaffTicketWrites=true` with scoped IAM permissions.                                         | PLUMBING smoke passed: assigned ticket moved through `IN_PROGRESS` to `DONE` with a JPEG proof. Reporter upload grant regression passed with a fresh LINE token. |
 | Notifications | TicketEvents stream consumer, LINE sender, SES sender, and unit tests exist.                                                                                                            | Replace the placeholder LINE secret, verify the SES sender and sandbox recipients or obtain production access, and seed Teams records with email addresses.      |
 | Staff portal  | Frontend code exists.                                                                                                                                                                   | Finish its API endpoints and authentication; add ECS/ECR/ALB only if the team chooses that bonus path.                                                           |
@@ -152,6 +152,18 @@ another team. After enabling the shared upload handler, set a fresh
 check requests an authenticated reporter upload grant without writing another
 ticket or printing the presigned URL.
 
+For the completed reporter ticket, use a fresh `LINE_ID_TOKEN` from the same
+LINE user who created it and run:
+
+```sh
+npm run test:smoke:reporter-ticket-read -- <completed-ticket-id>
+```
+
+This read-only check covers the reporter's completed list and detail,
+rejects a staff-only team filter, and checks that no private fields appear in
+the responses. It does not prove that a different reporter is denied; that
+requires a second LINE account.
+
 After deployment, seed the first manager account privately with the backend's
 `seed:accounts` script and test login and `/me` using
 `npm run test:smoke:staff-auth` with `STAFF_EMAIL` and `STAFF_PASSWORD` set in
@@ -174,7 +186,7 @@ Pass the same context values to `infra:diff` and, after review, `infra:deploy`. 
 
 - The backend's `POST /tickets` handler expects API Gateway **payload v2**, so this stack uses HTTP API. HTTP API stage throttling is available, but an AWS WAF web ACL cannot be directly associated with an HTTP API stage. The proposed **per-IP WAF limit** is therefore not implemented here. The DynamoDB per-LINE-user limit remains in the backend. Decide whether to use CloudFront in front of this API or adapt the backend to REST API before claiming the per-IP requirement is met.
 - The LIFF app still submits a stub report; it must call `POST /uploads`, PUT the image to the returned URL, then call `POST /tickets` with the upload ID. The upload route needs the LINE Login channel ID, and the full flow needs a real LINE ID token for testing.
-- Staff login and `/me` are deployed behind `enableStaffAuth=true` and passed an authenticated manager smoke test. Ticket reads are deployed behind `enableStaffTicketReads=true` and passed a manager list/detail smoke test. Staff status changes and proof uploads are deployed behind `enableStaffTicketWrites=true`; a PLUMBING technician completed an assigned test ticket with a JPEG proof. The reporter upload grant regression passed; other team permissions and the completed-ticket list still need live checks. The staff signing secret is generated in Secrets Manager when staff auth is enabled.
+- Staff login and `/me` are deployed behind `enableStaffAuth=true` and passed an authenticated manager smoke test. Ticket reads are deployed behind `enableStaffTicketReads=true` and passed a manager list/detail smoke test. Staff status changes and proof uploads are deployed behind `enableStaffTicketWrites=true`; a PLUMBING technician completed an assigned test ticket with a JPEG proof. The reporter upload grant regression and technician completed-list/team-scope smoke tests passed; reporter reads and cross-team ticket detail still need live checks. The staff signing secret is generated in Secrets Manager when staff auth is enabled.
 - The standalone Sonnet 5 call succeeded after removing its deprecated `temperature` parameter, and the live intake-to-Bedrock-to-DynamoDB triage path passed a smoke test. Optional Rekognition photo labelling has not been confirmed from logs; the triage Lambda has a 60-second timeout for both service calls. SES is currently in the Singapore sandbox with zero identities; outgoing work orders cannot be tested until verified.
 - `RateLimits` is incremented before the ticket transaction. A failed transaction can consume a quota slot. Coordinate this with the backend developer before production use.
 - This stack deliberately creates no staff passwords or email addresses. One manager account was seeded manually; team records and technician accounts remain to be seeded.
