@@ -23,6 +23,10 @@ if (!asset?.source?.path) {
 }
 
 const assetDir = path.join(outputDir, asset.source.path);
+const bundledHandler = await readFile(path.join(assetDir, 'index.js'), 'utf8');
+if (!bundledHandler.includes('getPhotoAccessBootstrap')) {
+  throw new Error('The photo Lambda asset omitted staff secret bootstrap.');
+}
 const nativeDir = path.join(assetDir, 'node_modules/@img/sharp-linux-x64/lib');
 const nativeFiles = await readdir(nativeDir);
 if (!nativeFiles.some((name) => name.endsWith('.node'))) {

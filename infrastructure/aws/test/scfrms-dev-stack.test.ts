@@ -193,6 +193,7 @@ describe('G02 development stack', () => {
     const statements = policies[0][1].Properties.PolicyDocument.Statement as {
       Action: string | string[];
       Resource: unknown;
+      Condition?: { StringLike?: Record<string, string[]> };
     }[];
     const thumbnailWrite = statements.find(
       ({ Action }) => Action === 's3:PutObject',
@@ -201,11 +202,19 @@ describe('G02 development stack', () => {
     expect(JSON.stringify(thumbnailWrite?.Resource)).not.toContain(
       '/uploads/*',
     );
+    const scopedList = statements.find(
+      ({ Action }) => Action === 's3:ListBucket',
+    );
+    expect(scopedList?.Condition?.StringLike?.['s3:prefix']).toEqual([
+      'uploads/*',
+      'thumbnails/*',
+    ]);
     const actions = statements.flatMap(({ Action }) => Action);
     expect(actions).toContain('dynamodb:GetItem');
     expect(actions).toContain('dynamodb:Query');
     expect(actions).toContain('s3:GetObject');
     expect(actions).toContain('s3:PutObject');
+    expect(actions).toContain('s3:ListBucket');
     expect(actions).not.toContain('dynamodb:Scan');
     expect(actions).not.toContain('s3:DeleteObject');
   });

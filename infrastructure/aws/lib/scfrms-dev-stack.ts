@@ -427,7 +427,7 @@ export class ScfrmsDevStack extends Stack {
       if (photoAccessEnabled) {
         const photoAccess = fn(
           'GetPhotoAccess',
-          'tickets/get-photo-access.ts',
+          'handlers/get-photo-access-entry.ts',
           { ...staffEnv, LINE_LOGIN_CHANNEL_ID: lineChannelId as string },
           Duration.seconds(30),
           { memorySize: 512, nodeModules: ['sharp'] },
@@ -462,6 +462,15 @@ export class ScfrmsDevStack extends Stack {
           new iam.PolicyStatement({
             actions: ['s3:PutObject'],
             resources: [`${uploads.bucketArn}/thumbnails/*`],
+          }),
+        );
+        photoAccess.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['s3:ListBucket'],
+            resources: [uploads.bucketArn],
+            conditions: {
+              StringLike: { 's3:prefix': ['uploads/*', 'thumbnails/*'] },
+            },
           }),
         );
         api.addRoutes({

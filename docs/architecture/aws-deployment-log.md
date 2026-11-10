@@ -16,6 +16,7 @@ it is not a production readiness claim.
 | Ticket reads        | `GET /v1/tickets` and `GET /v1/tickets/{ticketId}` Lambda routes were deployed with specific DynamoDB read permissions. Both returned 401 without a token. A manager session listed the PLUMBING team's tickets and read the known ticket without exposing private fields.         |
 | Staff status        | `PATCH /v1/tickets/{ticketId}/status` and technician `REPAIR_PROOF` uploads were deployed. A PLUMBING technician moved the test ticket from `ASSIGNED` to `IN_PROGRESS` to `DONE`, uploaded a JPEG proof, and read back the persisted result.                                      |
 | Staff history index | `TeamDoneIndex` was added to the Tickets table for completed-ticket queries. The PLUMBING technician's completed-list smoke test found the DONE ticket through the API.                                                                                                            |
+| Photo access        | `GET /v1/tickets/{ticketId}/photos/{photoId}/access` and a Lambda bundle containing native `sharp` were deployed. The first live reporter smoke test returned HTTP 500; a fix is prepared and awaits redeployment and retest.                                                      |
 
 API base URL: `https://h5ekgxy0j7.execute-api.ap-southeast-1.amazonaws.com/v1`.
 The staff-status deployment used the `infrastructure/api-intake-readiness`
@@ -152,13 +153,22 @@ The first attempt with a reused LINE ID token returned HTTP 401. Direct LINE
 verification showed that token had expired. A fresh login and new ID token
 made the same smoke test pass. No token value is stored in this log or in Git.
 
+On 2026-11-10, the photo-access smoke test against the deployed route returned
+HTTP 500. CloudWatch identified `STAFF_JWT_SECRET environment variable is not
+set` in `getTicketPhotoAccess`. The Lambda had been deployed from the handler
+directly, skipping the Secrets Manager bootstrap used by the other mixed
+staff/reporter routes. The correction uses a bootstrap entry point. The photo
+helper also now checks for a missing thumbnail through a prefix-scoped S3 list
+operation, which avoids a 403 from `HeadObject` on a missing key without broad
+bucket-list permission. These changes still need a live redeploy and smoke test.
+
 ## Next deployment gates
 
 - A cross-team ticket-detail check needs a known ticket assigned to another
   team. A different-reporter denial check needs a second LINE account. Deploy
-  and test the remaining staff write routes and reporter reopen. Photo access
-  is prepared behind `enablePhotoAccess=true`; verify its Linux Lambda asset,
-  inspect the CDK diff, then deploy and run the photo-access smoke test.
+  and test the remaining staff write routes and reporter reopen. Redeploy the
+  corrected photo Lambda with `enablePhotoAccess=true`, then rerun the photo
+  access smoke test with a fresh original reporter LINE ID token.
 - Seed Teams records and the other shared team accounts when their names and
   notification email addresses are agreed.
 - The notification worker is not enabled. Replace the placeholder LINE
