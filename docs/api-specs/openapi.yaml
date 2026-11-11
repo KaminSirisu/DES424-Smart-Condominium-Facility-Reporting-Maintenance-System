@@ -1070,7 +1070,7 @@ components:
             merged source), DUPLICATES_MERGED (on the canonical ticket) and
             REOPENED (fromStatus DONE, toStatus ASSIGNED, repairCycle of the new
             cycle, note is the reporter's reason) and REASSIGNED (fromTeamId,
-            toTeamId, note is the manager's reason). STATUS_CHANGED, MERGED and
+            toTeamId, note is the manager's reason) and SLA_BREACHED (actorType SYSTEM, written once per repair cycle when the resolution deadline passes while the ticket is still ASSIGNED or IN_PROGRESS). STATUS_CHANGED, MERGED and
             REOPENED carry fromStatus and toStatus. The staff
             UI also shows PRIORITY_CHANGED and PRIORITY_CONFIRMED, which the
             priority endpoint writes (fromPriority, toPriority, note), and any
