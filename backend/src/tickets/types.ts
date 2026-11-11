@@ -74,11 +74,17 @@ export interface TicketRecord {
   safetyHazard?: string;
   deadlineAt?: string;
   /**
-   * When the SLA clock started, only if that is earlier than `createdAt`: a
-   * merge sets it when a ticket merged into this one was created before it
-   * (SLA-09). Internal; see slaStartOf() in triage/policy.ts.
+   * When the current SLA clock started, when that is not `createdAt`: a merge
+   * sets it to the earlier start of a ticket merged into this one (SLA-09), and
+   * a reopen sets it to the time of the reopen (SLA-10). Internal; see
+   * slaStartOf() in triage/policy.ts.
    */
   slaStartAt?: string;
+  /**
+   * A hash of the Idempotency-Key of the last reopen, so a retry of that
+   * request is recognised and changes nothing. Internal.
+   */
+  reopenKey?: string;
   completedAt?: string;
   mergedIntoTicketId?: string;
 

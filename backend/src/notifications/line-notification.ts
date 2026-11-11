@@ -6,6 +6,7 @@ import {
   buildAssignedMessage,
   buildCompletedMessage,
   buildMergedMessage,
+  buildReopenedMessage,
   buildReceiptMessage,
   buildStartedMessage,
   type FlexOptions,
@@ -24,7 +25,9 @@ import {
  * notice; STATUS_CHANGED sends the work started notice (toStatus IN_PROGRESS)
  * or the completion notice (toStatus DONE, SCFRMS-43); MERGED, written on a
  * ticket that was merged into another, tells that ticket's reporters
- * (SCFRMS-44). The completion notice shows the repair photo as a small copy
+ * (SCFRMS-44); REOPENED, written when a reporter sends a finished repair
+ * back to the team, tells that ticket's reporters (SCFRMS-43). The completion
+ * notice shows the repair photo as a small copy
  * with a signed URL (see shared/proof-photo.ts); if that cannot be made the
  * notice is sent without the photo, because telling the reporter matters more
  * than the picture.
@@ -39,6 +42,7 @@ export const LINE_KINDS = [
   'TRIAGED',
   'STATUS_CHANGED',
   'MERGED',
+  'REOPENED',
 ] as const;
 
 export function flexOptionsFromEnv(): FlexOptions {
@@ -58,6 +62,7 @@ function messageFor(
   }
   if (event.kind === 'TRIAGED') return buildAssignedMessage(ticket, options);
   if (event.kind === 'MERGED') return buildMergedMessage(ticket, options);
+  if (event.kind === 'REOPENED') return buildReopenedMessage(ticket, options);
   if (event.kind === 'STATUS_CHANGED') {
     if (event.toStatus === 'IN_PROGRESS') {
       return buildStartedMessage(ticket, options);

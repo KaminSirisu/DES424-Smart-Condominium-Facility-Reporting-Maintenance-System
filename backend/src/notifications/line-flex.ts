@@ -272,6 +272,33 @@ export function buildStartedMessage(
 }
 
 /**
+ * Sent when the reporter reopens a finished repair (REOPENED): the team has it
+ * again, so the repair is checked a second time.
+ */
+export function buildReopenedMessage(
+  ticket: TicketRecord,
+  options: FlexOptions = {},
+): LineMessage {
+  const label = teamLabel(ticket.teamId);
+  const footer: FlexComponent[] = [];
+  const details = ticketUrl(options.liffUrl, ticket.id);
+  if (details) footer.push(button('View report', details));
+
+  return bubble(
+    `Your report ${ticket.id} was reopened`,
+    'Report reopened',
+    [
+      text(
+        `Your report was reopened and sent back to the ${label} team to check the repair again.`,
+      ),
+      row('Ticket', ticket.id),
+      row('Location', cleanText(ticket.location, MAX_LOCATION_LENGTH)),
+    ],
+    footer,
+  );
+}
+
+/**
  * Sent to the reporters of a ticket that a technician merged into another
  * report of the same problem (RR-02). `ticket` is the merged ticket; the link
  * opens the ticket it was merged into, which its reporters are linked to.

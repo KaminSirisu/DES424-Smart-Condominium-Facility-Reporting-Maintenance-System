@@ -366,7 +366,7 @@ export interface StatusChange {
  *    (`teamStatusKey`); DONE removes it from the open queue.
  *  - DONE also stores the repair proof photo (TicketPhotos) and `completedAt`,
  *    and puts the ticket in the team's completed list (`teamDoneKey`,
- *    `completedKey`; reopening a ticket must remove both).
+ *    `completedKey`; reopenTicket() removes both).
  *
  * Only succeeds if the ticket is in the expected status at the version that
  * was read. Otherwise it fails with
@@ -1012,6 +1012,96 @@ export async function setTicketPriority(
             Key: { ticketId: ticket.id },
             ConditionExpression:
               '#status IN (:assigned, :inProgress) AND #version = :version',
+            UpdateExpression: update,
+            ExpressionAttributeNames: {
+              '#status': 'status',
+              '#version': 'version',
+            },
+            ExpressionAttributeValues: values,
+          },
+        },
+        {
+          Put: {
+            TableName: tableName('TICKET_EVENTS'),
+            Item: toEventItem(event),
+          },
+        },
+      ],
+    }),
+  );
+}
+
+export interface ReopenChange {
+  now: string;
+  /** A hash of the Idempotency-Key, kept on the ticket to recognise a retry. */
+  reopenKey: string;
+  /** Why the reporter reopens it, when they said. */
+  reason?: string;
+  /** The new deadline: a new resolution clock from `now`, same priority (SLA-10). */
+  deadlineAt?: string;
+}
+
+/**
+ * A reporter reopens a ticket that is DONE (RR-03): it goes back to ASSIGNED,
+ * to the team's open queue and out of the completed list, in one transaction
+ * with a REOPENED audit event.
+ *
+ *  - `repairCycle` goes up by one; the event records the new cycle, and the
+ *    earlier cycle's events and proof photos stay as they were.
+ *  - `completedAt` is removed, the ticket is no longer completed.
+ *  - A new SLA clock starts now (SLA-10): `slaStartAt` is `now` and
+ *    `deadlineAt` is counted from it with the same priority.
+ *
+ * Only succeeds if the ticket is still DONE at the version that was read.
+ * Otherwise it fails with TransactionCanceledException (reason
+ * ConditionalCheckFailed at index 0).
+ */
+export async function reopenTicket(
+  ticket: TicketRecord,
+  change: ReopenChange,
+): Promise<void> {
+  if (!ticket.teamId) throw new Error(`Ticket ${ticket.id} has no team.`);
+
+  const event: TicketEventRecord = {
+    id: `${ticket.id}_reopened_v${ticket.version + 1}`,
+    ticketId: ticket.id,
+    kind: 'REOPENED',
+    occurredAt: change.now,
+    actorType: 'REPORTER',
+    fromStatus: 'DONE',
+    toStatus: 'ASSIGNED',
+    repairCycle: ticket.repairCycle + 1,
+    ...(change.reason ? { note: change.reason } : {}),
+  };
+
+  const values: Record<string, unknown> = {
+    ':done': 'DONE',
+    ':assigned': 'ASSIGNED',
+    ':version': ticket.version,
+    ':one': 1,
+    ':now': change.now,
+    ':cycle': ticket.repairCycle + 1,
+    ':teamStatusKey': `TEAM#${ticket.teamId}#STATUS#ASSIGNED`,
+    ':reopenKey': change.reopenKey,
+  };
+  let update =
+    'SET #status = :assigned, repairCycle = :cycle, updatedAt = :now, ' +
+    '#version = #version + :one, teamStatusKey = :teamStatusKey, ' +
+    'slaStartAt = :now, reopenKey = :reopenKey';
+  if (change.deadlineAt) {
+    update += ', deadlineAt = :deadlineAt';
+    values[':deadlineAt'] = change.deadlineAt;
+  }
+  update += ' REMOVE completedAt, teamDoneKey, completedKey';
+
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: tableName('TICKETS'),
+            Key: { ticketId: ticket.id },
+            ConditionExpression: '#status = :done AND #version = :version',
             UpdateExpression: update,
             ExpressionAttributeNames: {
               '#status': 'status',

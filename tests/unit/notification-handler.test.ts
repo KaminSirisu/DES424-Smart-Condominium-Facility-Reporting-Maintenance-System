@@ -15,7 +15,7 @@ vi.mock('../../backend/src/notifications/work-order-email', () => ({
 vi.mock('../../backend/src/notifications/line-notification', () => ({
   lineReporterChannel: {
     name: 'LINE_REPORTER',
-    kinds: ['CREATED', 'TRIAGED', 'MERGED'],
+    kinds: ['CREATED', 'TRIAGED', 'MERGED', 'REOPENED'],
     recipients: vi.fn(),
     send: vi.fn(),
   },
@@ -152,6 +152,22 @@ describe('notification stream handler', () => {
       ticket(),
       'Uaaa',
       expect.objectContaining({ kind: 'MERGED', eventId: 'tkt_1_merged' }),
+    );
+  });
+
+  it('sends only the LINE reopened notice, and no work order email, when a ticket is reopened', async () => {
+    const result = await handler(eventOf(record('REOPENED', '1')));
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).toHaveBeenCalledTimes(2);
+    expect(lineSend).toHaveBeenCalledWith(
+      ticket(),
+      'Uaaa',
+      expect.objectContaining({
+        kind: 'REOPENED',
+        eventId: 'tkt_1_reopened',
+      }),
     );
   });
 
