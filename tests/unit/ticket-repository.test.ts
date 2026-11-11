@@ -501,6 +501,56 @@ describe('applyTriage', () => {
     });
   });
 
+  it('records the automatic triage as the system, with no manager', async () => {
+    await applyTriage('tkt_1', 3, update);
+
+    const [ticketUpdate, eventPut] = transactItems();
+    expect(eventPut.Put?.Item).toMatchObject({ actorType: 'SYSTEM' });
+    expect(eventPut.Put?.Item).not.toHaveProperty('actorStaffId');
+    expect(ticketUpdate.Update?.ExpressionAttributeValues).toMatchObject({
+      ':prioritySetBy': 'AI',
+    });
+  });
+
+  it('records a triage by hand as the manager who did it, with the reason', async () => {
+    await applyTriage('tkt_1', 3, {
+      ...update,
+      staff: { accountId: 'manager@example.com', reason: 'Lift and lights' },
+    });
+
+    const [ticketUpdate, eventPut] = transactItems();
+    expect(ticketUpdate.Update?.ExpressionAttributeValues).toMatchObject({
+      ':prioritySetBy': 'STAFF',
+      ':teamStatusKey': 'TEAM#PLUMBING#STATUS#ASSIGNED',
+    });
+    expect(ticketUpdate.Update?.ConditionExpression).toBe(
+      '#status = :received AND #version = :version',
+    );
+    expect(eventPut.Put?.Item).toMatchObject({
+      kind: 'TRIAGED',
+      actorType: 'STAFF',
+      actorStaffId: 'manager@example.com',
+      fromStatus: 'RECEIVED',
+      toStatus: 'ASSIGNED',
+      toPriority: 'MEDIUM',
+      toTeamId: 'PLUMBING',
+      note: 'Lift and lights',
+    });
+  });
+
+  it('records a triage by hand without a reason without a note', async () => {
+    await applyTriage('tkt_1', 3, {
+      ...update,
+      staff: { accountId: 'manager@example.com' },
+    });
+    const [, eventPut] = transactItems();
+    expect(eventPut.Put?.Item).toMatchObject({
+      actorType: 'STAFF',
+      actorStaffId: 'manager@example.com',
+    });
+    expect(eventPut.Put?.Item).not.toHaveProperty('note');
+  });
+
   it('leaves safety fields out of an ordinary triage', async () => {
     await applyTriage('tkt_1', 3, update);
 

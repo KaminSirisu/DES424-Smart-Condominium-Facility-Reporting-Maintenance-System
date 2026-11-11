@@ -16,8 +16,9 @@ import { ClassifierError, classifyTicket } from './classifier.js';
  *
  * Failures:
  *  - Permanent (unusable AI reply, missing ticket): logged, no retry. The
- *    ticket stays RECEIVED and shows up in GET /tickets?status=RECEIVED for
- *    manual triage.
+ *    ticket stays RECEIVED, with no team and no deadline. A manager lists such
+ *    tickets with GET /tickets?status=RECEIVED and triages one by hand with
+ *    PATCH /tickets/{ticketId}/triage (tickets/triage-ticket.ts).
  *  - Temporary (Bedrock throttling, DynamoDB errors): reported as a partial
  *    batch failure so Lambda retries from that record. Needs
  *    ReportBatchItemFailures on the event source mapping, a stream view of

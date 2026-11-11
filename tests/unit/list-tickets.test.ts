@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { ApiError, type TicketRecord } from '../../backend/src/tickets/types';
 
@@ -15,6 +15,7 @@ vi.mock('../../backend/src/shared/ticket-reporters', () => ({
   isReporterOf: vi.fn(),
 }));
 vi.mock('../../backend/src/shared/ticket-repository', () => ({
+  listReceivedTickets: vi.fn(),
   listReporterTickets: vi.fn(),
   listTeamTickets: vi.fn(),
   listCompletedTickets: vi.fn(),
@@ -25,6 +26,7 @@ import { verifyLineToken } from '../../backend/src/shared/line-token';
 import { requireStaff } from '../../backend/src/shared/staff-auth';
 import {
   listCompletedTickets,
+  listReceivedTickets,
   listReporterTickets,
   listTeamTickets,
 } from '../../backend/src/shared/ticket-repository';
@@ -101,6 +103,7 @@ describe('GET /tickets', () => {
     vi.mocked(listReporterTickets).mockResolvedValue({ tickets: [ticket] });
     vi.mocked(listTeamTickets).mockResolvedValue({ tickets: [ticket] });
     vi.mocked(listCompletedTickets).mockResolvedValue({ tickets: [ticket] });
+    vi.mocked(listReceivedTickets).mockResolvedValue({ tickets: [ticket] });
   });
 
   describe('a reporter', () => {
@@ -238,18 +241,27 @@ describe('GET /tickets', () => {
       expect(listTeamTickets).not.toHaveBeenCalled();
     });
 
-    it('cannot see RECEIVED or MERGED tickets, or mix DONE with open ones', async () => {
-      for (const query of [
-        'status=RECEIVED',
-        'status=MERGED',
-        'status=ASSIGNED&status=RECEIVED',
-        'status=DONE&status=ASSIGNED',
-      ]) {
+    it('cannot see MERGED tickets, or mix DONE with open ones', async () => {
+      for (const query of ['status=MERGED', 'status=DONE&status=ASSIGNED']) {
         const response = await handler(event(query, technician));
         expect(response.statusCode).toBe(422);
       }
       expect(listTeamTickets).not.toHaveBeenCalled();
       expect(listCompletedTickets).not.toHaveBeenCalled();
+    });
+
+    it('may not list the tickets waiting for triage, alone or with others (403)', async () => {
+      for (const query of [
+        'status=RECEIVED',
+        'status=ASSIGNED&status=RECEIVED',
+        'status=RECEIVED&teamId=PLUMBING',
+      ]) {
+        const response = await handler(event(query, technician));
+        expect(response.statusCode).toBe(403);
+        expect(body(response).error.code).toBe('FORBIDDEN');
+      }
+      expect(listReceivedTickets).not.toHaveBeenCalled();
+      expect(listTeamTickets).not.toHaveBeenCalled();
     });
 
     it('needs status=DONE for the completed date filters', async () => {
@@ -329,6 +341,109 @@ describe('GET /tickets', () => {
         'ELECTRICAL',
         expect.any(Object),
       );
+    });
+
+    describe('the tickets waiting for triage (status=RECEIVED)', () => {
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-11-12T09:00:00.000Z'));
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+      });
+
+      it('lists them oldest first from the last three months, as views without private fields', async () => {
+        const response = await handler(event('status=RECEIVED', manager));
+
+        expect(response.statusCode).toBe(200);
+        expect(listReceivedTickets).toHaveBeenCalledWith(
+          ['2026-09', '2026-10', '2026-11'],
+          { limit: 20, after: undefined },
+        );
+        expect(listTeamTickets).not.toHaveBeenCalled();
+        const [item] = body(response).items;
+        expect(item.id).toBe('tkt_1');
+        expect(item).not.toHaveProperty('reporterLineUserId');
+        expect(item).not.toHaveProperty('version');
+        expect(response.headers?.['cache-control']).toBe('no-store');
+      });
+
+      it('reads the number of months from TRIAGE_QUEUE_MONTHS', async () => {
+        vi.stubEnv('TRIAGE_QUEUE_MONTHS', '2');
+        await handler(event('status=RECEIVED', manager));
+        expect(vi.mocked(listReceivedTickets).mock.calls[0][0]).toEqual([
+          '2026-10',
+          '2026-11',
+        ]);
+      });
+
+      it('passes the limit, hands out a cursor when there is more and continues from it', async () => {
+        vi.mocked(listReceivedTickets).mockResolvedValueOnce({
+          tickets: [ticket],
+          next: '2026-10-30T08:00:00.000Z#tkt_9',
+        });
+        const first = await handler(event('status=RECEIVED&limit=1', manager));
+        expect(vi.mocked(listReceivedTickets).mock.calls[0][1]).toEqual({
+          limit: 1,
+          after: undefined,
+        });
+        const { nextCursor } = body(first);
+        expect(
+          JSON.parse(Buffer.from(nextCursor, 'base64url').toString()),
+        ).toEqual({
+          q: '2026-10-30T08:00:00.000Z#tkt_9',
+        });
+
+        await handler(event(`status=RECEIVED&cursor=${nextCursor}`, manager));
+        expect(vi.mocked(listReceivedTickets).mock.calls[1][1]).toEqual({
+          limit: 20,
+          after: '2026-10-30T08:00:00.000Z#tkt_9',
+        });
+      });
+
+      it('has no cursor on the last page', async () => {
+        const response = await handler(event('status=RECEIVED', manager));
+        expect(body(response)).not.toHaveProperty('nextCursor');
+      });
+
+      it('cannot be mixed with other statuses (422)', async () => {
+        for (const query of [
+          'status=RECEIVED&status=ASSIGNED',
+          'status=DONE&status=RECEIVED',
+        ]) {
+          expect((await handler(event(query, manager))).statusCode).toBe(422);
+        }
+        expect(listReceivedTickets).not.toHaveBeenCalled();
+      });
+
+      it('takes no team, location or completed filter (400)', async () => {
+        for (const query of [
+          'status=RECEIVED&teamId=PLUMBING',
+          'status=RECEIVED&location=Lobby',
+          'status=RECEIVED&completedFrom=2026-11-01',
+          'status=RECEIVED&completedTo=2026-11-02',
+        ]) {
+          expect((await handler(event(query, manager))).statusCode).toBe(400);
+        }
+        expect(listReceivedTickets).not.toHaveBeenCalled();
+      });
+
+      it('rejects a cursor of another list (400)', async () => {
+        const response = await handler(
+          event(`status=RECEIVED&cursor=${cursorOf({ o: {} })}`, manager),
+        );
+        expect(response.statusCode).toBe(400);
+      });
+
+      it('answers 500 without details when the read fails', async () => {
+        vi.mocked(listReceivedTickets).mockRejectedValue(
+          new Error('index gone: secret'),
+        );
+        const response = await handler(event('status=RECEIVED', manager));
+        expect(response.statusCode).toBe(500);
+        expect(response.body).not.toContain('secret');
+      });
     });
 
     it('must name a real team', async () => {

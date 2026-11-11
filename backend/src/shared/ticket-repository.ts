@@ -271,6 +271,11 @@ export interface TriageUpdate {
   slaPolicyVersion: number;
   /** Set when the safety override (SLA-02) decided the priority. */
   safetyHazard?: string;
+  /**
+   * Set when a manager triaged the ticket by hand (RR-12): `prioritySetBy`
+   * is then STAFF and the event names the manager and the reason.
+   */
+  staff?: { accountId: string; reason?: string };
   /** Time of this update; also the audit event's occurredAt. */
   now: string;
 }
@@ -296,14 +301,17 @@ export async function applyTriage(
     ticketId,
     kind: 'TRIAGED',
     occurredAt: update.now,
-    actorType: 'SYSTEM',
+    actorType: update.staff ? 'STAFF' : 'SYSTEM',
+    ...(update.staff ? { actorStaffId: update.staff.accountId } : {}),
     fromStatus: 'RECEIVED',
     toStatus: 'ASSIGNED',
     toPriority: update.priority,
     toTeamId: update.teamId,
     ...(update.safetyHazard
       ? { note: `SAFETY_OVERRIDE:${update.safetyHazard}` }
-      : {}),
+      : update.staff?.reason
+        ? { note: update.staff.reason }
+        : {}),
   };
 
   await ddb.send(
@@ -338,7 +346,7 @@ export async function applyTriage(
               ':policy': update.slaPolicyVersion,
               ':now': update.now,
               ':teamStatusKey': `TEAM#${update.teamId}#STATUS#ASSIGNED`,
-              ':prioritySetBy': 'AI',
+              ':prioritySetBy': update.staff ? 'STAFF' : 'AI',
               ...(update.safetyHazard
                 ? { ':hazard': update.safetyHazard }
                 : {}),
@@ -1440,4 +1448,86 @@ export async function recordSlaAlert(
     }
     throw err;
   }
+}
+
+/**
+ * The tickets of `months` (UTC `YYYY-MM`, oldest first) that are still
+ * RECEIVED, in creation order: CreatedMonthIndex has no status in its key, so
+ * every ticket of the months is read and the status is filtered. `after` is
+ * the `createdKey` to continue after.
+ */
+async function* receivedItems(
+  months: string[],
+  after?: string,
+): AsyncGenerator<TicketItem> {
+  for (const month of months) {
+    if (after !== undefined && month < after.slice(0, 7)) continue;
+    const continuing = after !== undefined && month === after.slice(0, 7);
+    let startKey: Record<string, unknown> | undefined;
+    do {
+      const page = await ddb.send(
+        new QueryCommand({
+          TableName: tableName('TICKETS'),
+          IndexName: 'CreatedMonthIndex',
+          KeyConditionExpression: continuing
+            ? 'createdMonth = :month AND createdKey > :after'
+            : 'createdMonth = :month',
+          FilterExpression: '#status = :received',
+          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeValues: {
+            ':month': month,
+            ':received': 'RECEIVED',
+            ...(continuing ? { ':after': after } : {}),
+          },
+          ExclusiveStartKey: startKey,
+        }),
+      );
+      for (const item of page.Items ?? []) yield item as TicketItem;
+      startKey = page.LastEvaluatedKey;
+    } while (startKey);
+  }
+}
+
+/**
+ * A page of the tickets waiting for a manager's triage, oldest first (see
+ * tickets/triage-queue.ts). `next` is the `createdKey` of the last ticket of
+ * the page, present only when there is more. A ticket that was triaged between
+ * the index read and the read of the ticket is left out, so a page can be
+ * shorter than `limit`.
+ */
+export async function listReceivedTickets(
+  months: string[],
+  options: { limit: number; after?: string },
+): Promise<TicketListPage<string>> {
+  const items: TicketItem[] = [];
+  for await (const item of receivedItems(months, options.after)) {
+    items.push(item);
+    // One more than the page, to know whether there is a next page.
+    if (items.length > options.limit) break;
+  }
+  const page = items.slice(0, options.limit);
+  const loaded = await loadTickets(page.map((item) => item.ticketId));
+  const tickets = page
+    .map((item) => loaded.get(item.ticketId))
+    .filter(
+      (ticket): ticket is TicketRecord =>
+        ticket !== undefined && ticket.status === 'RECEIVED',
+    );
+  return items.length > options.limit
+    ? { tickets, next: page[page.length - 1].createdKey }
+    : { tickets };
+}
+
+/**
+ * Every RECEIVED ticket of `months`, from the index alone (no photos): what
+ * the SLA sweep looks at for tickets that wait too long for triage.
+ */
+export async function listAllReceivedTickets(
+  months: string[],
+): Promise<TicketRecord[]> {
+  const tickets: TicketRecord[] = [];
+  for await (const item of receivedItems(months)) {
+    tickets.push(toTicketRecord(item, []));
+  }
+  return tickets;
 }

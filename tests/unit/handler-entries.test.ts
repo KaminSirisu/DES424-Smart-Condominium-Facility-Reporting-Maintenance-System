@@ -18,6 +18,7 @@ const CASES: [entry: string, target: string][] = [
   ['list-ticket-events-entry', 'tickets/list-ticket-events'],
   ['list-duplicate-candidates-entry', 'tickets/list-duplicate-candidates'],
   ['set-priority-entry', 'tickets/set-priority'],
+  ['triage-ticket-entry', 'tickets/triage-ticket'],
   ['reassign-ticket-entry', 'tickets/reassign-ticket'],
   ['get-dashboard-summary-entry', 'tickets/get-dashboard-summary'],
   ['get-dashboard-history-entry', 'tickets/get-dashboard-history'],

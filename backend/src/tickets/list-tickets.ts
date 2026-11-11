@@ -4,6 +4,7 @@ import type {
 } from 'aws-lambda';
 import {
   listCompletedTickets,
+  listReceivedTickets,
   listReporterTickets,
   listTeamTickets,
   type OpenStatus,
@@ -25,6 +26,7 @@ import {
 } from './paging.js';
 import { identifyCaller } from './ticket-access.js';
 import { toTicketView } from './ticket-view.js';
+import { triageQueueWindow } from './triage-queue.js';
 import { ApiError, type TicketRecord, type TicketStatus } from './types.js';
 
 /**
@@ -42,10 +44,15 @@ import { ApiError, type TicketRecord, type TicketStatus } from './types.js';
  *               first, optionally within completedFrom..completedTo (UTC
  *               dates, inclusive). teamId, when given, must be their own (403).
  *   manager     the same, for the team named by teamId, which is required.
+ *               status RECEIVED alone (no teamId, no location filter) lists the
+ *               tickets waiting for a manager's triage, oldest first: the ones
+ *               the automatic triage could not classify, which have no team
+ *               (see triage-queue.ts and PATCH /tickets/{ticketId}/triage).
+ *               A technician asking for RECEIVED is 403.
  *
  * The staff UI sends `status` more than once, so it is read from the raw query
- * string. Any other staff status (RECEIVED, MERGED) is 422: there is no index
- * for it yet, and DONE cannot be mixed with the open statuses. A page may hold
+ * string. Any other staff status (MERGED) is 422: there is no index for it,
+ * and DONE and RECEIVED cannot be mixed with other statuses. A page may hold
  * fewer than `limit` tickets while `nextCursor` is present, because filters are
  * applied after the index is read. The cursor is opaque; send it back as is.
  */
@@ -140,12 +147,54 @@ async function reporterPage(
   };
 }
 
+/** The page of tickets waiting for triage, for a manager. */
+async function receivedPage(
+  staff: { role: 'TECHNICIAN' | 'MANAGER' },
+  query: Query,
+): Promise<TicketListPage<unknown>> {
+  if (staff.role !== 'MANAGER') {
+    throw new ApiError(
+      403,
+      'FORBIDDEN',
+      'Only a manager can list tickets waiting for triage.',
+    );
+  }
+  if (query.statuses?.length !== 1) {
+    throw new ApiError(
+      422,
+      'UNPROCESSABLE',
+      'status RECEIVED cannot be combined with other statuses.',
+    );
+  }
+  if (query.teamId !== undefined) {
+    throw badRequest('A RECEIVED ticket has no team: leave teamId out.');
+  }
+  if (query.location !== undefined) {
+    throw badRequest('location cannot be used with status RECEIVED.');
+  }
+  if (query.completedFrom !== undefined || query.completedTo !== undefined) {
+    throw badRequest('completedFrom and completedTo need status=DONE.');
+  }
+  const page = await listReceivedTickets(triageQueueWindow(new Date()), {
+    limit: query.limit,
+    after: stringCursor(query.cursor, 'q'),
+  });
+  return {
+    tickets: page.tickets,
+    ...(page.next ? { next: { q: page.next } } : {}),
+  };
+}
+
 /** The page for a technician or a manager. */
 async function staffPage(
   staff: { role: 'TECHNICIAN' | 'MANAGER'; teamId?: string },
   query: Query,
   filter: TicketFilter,
 ): Promise<TicketListPage<unknown>> {
+  if (query.statuses?.includes('RECEIVED')) {
+    return receivedPage(staff, query);
+  }
+
   let teamId: string;
   if (staff.role === 'TECHNICIAN') {
     if (query.teamId !== undefined && query.teamId !== staff.teamId) {
