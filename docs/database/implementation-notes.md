@@ -342,7 +342,7 @@ Each alert is raised once per SLA clock; only the `CRITICAL` reminder repeats, e
 
 **What the first sweep does.** Every open ticket already past a threshold when the sweep is first deployed is alerted at the first run, for each alert it owes, one email per recipient. Deploy it when that is acceptable, or clear old tickets first.
 
-**Not built from requirements 3.5 to 3.8.** The escalation at 150% to the juristic manager (E3), the quality alerts (a second reopen, a failed triage), the SMS and push channels, the per-ticket EventBridge Scheduler entries (SLA-12; only the 5 minute rule exists), the SLA targets stored as configuration that managers can edit (SLA-05; the hours are in code), the manual triage queue for tickets that stay `RECEIVED` after 5 minutes (SLA-06), and the dashboard measures of requirements 3.8.
+**Not built from requirements 3.5 to 3.8.** The escalation at 150% to the juristic manager (E3), which the team decided to leave out: the only manager role here is `MANAGER`, so E3 would email the same people as E2 a second time, and there is no SMS (an overdue `CRITICAL` ticket already gets an email every hour); it can be added as one more alert in `sla/alerts.ts` if two levels of recipient are ever defined. Also not built: the quality alerts (a second reopen, a failed triage), the SMS and push channels, the per-ticket EventBridge Scheduler entries (SLA-12; only the 5 minute rule exists), the SLA targets stored as configuration that managers can edit (SLA-05; the hours are in code), the manual triage queue for tickets that stay `RECEIVED` after 5 minutes (SLA-06), and the dashboard measures of requirements 3.8.
 
 ## Rate limits (SR-09, SR-31, proposal)
 
