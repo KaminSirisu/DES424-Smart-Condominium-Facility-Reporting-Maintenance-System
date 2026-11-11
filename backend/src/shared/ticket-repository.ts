@@ -1120,3 +1120,87 @@ export async function reopenTicket(
     }),
   );
 }
+
+export interface ReassignChange {
+  /** The team that takes the ticket. */
+  toTeamId: string;
+  /** The manager that decides; recorded as the actor of the event. */
+  accountId: string;
+  now: string;
+  /** Why the team changes. */
+  reason: string;
+  /** The deadline counted with the new team's policy, only when it differs (SLA-08). */
+  deadlineAt?: string;
+}
+
+/**
+ * A manager moves an ASSIGNED ticket to another team, in one transaction with
+ * the audit event: the ticket leaves the old team's open queue and enters the
+ * new team's (`teamStatusKey`), and a REASSIGNED event records the old team,
+ * the new team, the actor and the reason. Work that has started is not moved.
+ *
+ * Only succeeds if the ticket is still ASSIGNED at the version that was read.
+ * Otherwise it fails with TransactionCanceledException (reason
+ * ConditionalCheckFailed at index 0).
+ */
+export async function reassignTicket(
+  ticket: TicketRecord,
+  change: ReassignChange,
+): Promise<void> {
+  if (!ticket.teamId) throw new Error(`Ticket ${ticket.id} has no team.`);
+
+  const event: TicketEventRecord = {
+    id: `${ticket.id}_reassigned_v${ticket.version + 1}`,
+    ticketId: ticket.id,
+    kind: 'REASSIGNED',
+    occurredAt: change.now,
+    actorType: 'STAFF',
+    actorStaffId: change.accountId,
+    fromTeamId: ticket.teamId,
+    toTeamId: change.toTeamId,
+    repairCycle: ticket.repairCycle,
+    note: change.reason,
+  };
+
+  const values: Record<string, unknown> = {
+    ':assigned': 'ASSIGNED',
+    ':version': ticket.version,
+    ':one': 1,
+    ':now': change.now,
+    ':team': change.toTeamId,
+    ':teamStatusKey': `TEAM#${change.toTeamId}#STATUS#ASSIGNED`,
+  };
+  let update =
+    'SET teamId = :team, teamStatusKey = :teamStatusKey, updatedAt = :now, ' +
+    '#version = #version + :one';
+  if (change.deadlineAt) {
+    update += ', deadlineAt = :deadlineAt';
+    values[':deadlineAt'] = change.deadlineAt;
+  }
+
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: tableName('TICKETS'),
+            Key: { ticketId: ticket.id },
+            ConditionExpression: '#status = :assigned AND #version = :version',
+            UpdateExpression: update,
+            ExpressionAttributeNames: {
+              '#status': 'status',
+              '#version': 'version',
+            },
+            ExpressionAttributeValues: values,
+          },
+        },
+        {
+          Put: {
+            TableName: tableName('TICKET_EVENTS'),
+            Item: toEventItem(event),
+          },
+        },
+      ],
+    }),
+  );
+}
