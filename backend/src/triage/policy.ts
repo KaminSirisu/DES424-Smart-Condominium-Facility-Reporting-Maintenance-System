@@ -77,7 +77,32 @@ const TEAM_RESOLUTION_HOURS: Partial<
   Record<TeamId, Partial<Record<Priority, number>>>
 > = {};
 
-/** 1: the hours of requirements §3.5 (4, 24, 120). 2: the team's hours (3, 12, 48). */
+/**
+ * Minutes from the start of the SLA clock to the first sign of work, by
+ * priority (requirements §3.5): a ticket still ASSIGNED after that has missed
+ * its response target. The same for every team; the team's resolution hours
+ * (3, 12, 48) are not shorter than these, so they are kept as in the document.
+ */
+const RESPONSE_MINUTES: Record<Priority, number> = {
+  CRITICAL: 15,
+  MEDIUM: 120,
+  LOW: 1440,
+};
+
+export function responseMinutes(priority: Priority): number {
+  return RESPONSE_MINUTES[priority];
+}
+
+/** The warning (E0) comes when this share of the resolution time is used. */
+export const SLA_WARNING_SHARE = 0.75;
+
+/** A CRITICAL ticket that is overdue is alerted again this often (E2). */
+export const SLA_REPEAT_MINUTES = 60;
+
+/**
+ * 1: the hours of requirements §3.5 (4, 24, 120). 2: the team's hours (3, 12,
+ * 48), with the response targets above.
+ */
 export const SLA_POLICY_VERSION = 2;
 
 /**

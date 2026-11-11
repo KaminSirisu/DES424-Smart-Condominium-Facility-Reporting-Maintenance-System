@@ -73,7 +73,8 @@ describe('reopenTicket', () => {
       'SET #status = :assigned, repairCycle = :cycle, updatedAt = :now, ' +
         '#version = #version + :one, teamStatusKey = :teamStatusKey, ' +
         'slaStartAt = :now, reopenKey = :reopenKey, deadlineAt = :deadlineAt ' +
-        'REMOVE completedAt, teamDoneKey, completedKey, escalationLevel',
+        'REMOVE completedAt, teamDoneKey, completedKey, slaWarnedAt, ' +
+        'slaResponseBreachedAt, slaBreachedAt, slaBreachAlerts, slaLastBreachAlertAt',
     );
     expect(update.Update?.ExpressionAttributeValues).toEqual({
       ':done': 'DONE',

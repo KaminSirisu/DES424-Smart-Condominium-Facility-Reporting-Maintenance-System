@@ -10,6 +10,10 @@ import {
   isTeamId,
   priorityFor,
   resolutionHours,
+  responseMinutes,
+  SLA_POLICY_VERSION,
+  SLA_REPEAT_MINUTES,
+  SLA_WARNING_SHARE,
   slaStartOf,
 } from '../../backend/src/triage/policy';
 
@@ -32,6 +36,15 @@ describe('triage policy', () => {
     expect(resolutionHours('PLUMBING', 'CRITICAL')).toBe(3);
     expect(resolutionHours('PLUMBING', 'MEDIUM')).toBe(12);
     expect(resolutionHours('PLUMBING', 'LOW')).toBe(48);
+  });
+
+  it('gives each priority its response target and the SLA constants', () => {
+    expect(responseMinutes('CRITICAL')).toBe(15);
+    expect(responseMinutes('MEDIUM')).toBe(120);
+    expect(responseMinutes('LOW')).toBe(1440);
+    expect(SLA_WARNING_SHARE).toBe(0.75);
+    expect(SLA_REPEAT_MINUTES).toBe(60);
+    expect(SLA_POLICY_VERSION).toBe(2);
   });
 
   it('counts the deadline from ticket creation', () => {

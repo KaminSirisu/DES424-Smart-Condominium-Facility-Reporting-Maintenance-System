@@ -7,9 +7,10 @@ import {
 import { ddb } from './dynamodb-client.js';
 import type { TicketQuotaClaim } from './rate-limit.js';
 import { tableName } from './tables.js';
-import { TEAM_IDS } from '../triage/policy.js';
+import { SLA_REPEAT_MINUTES, TEAM_IDS } from '../triage/policy.js';
 import {
   Priority,
+  SlaAlert,
   StoredTicketPhoto,
   TicketEventRecord,
   TicketRecord,
@@ -1107,7 +1108,9 @@ export async function reopenTicket(
     update += ', deadlineAt = :deadlineAt';
     values[':deadlineAt'] = change.deadlineAt;
   }
-  update += ' REMOVE completedAt, teamDoneKey, completedKey, escalationLevel';
+  update +=
+    ' REMOVE completedAt, teamDoneKey, completedKey, slaWarnedAt, ' +
+    'slaResponseBreachedAt, slaBreachedAt, slaBreachAlerts, slaLastBreachAlertAt';
 
   await ddb.send(
     new TransactWriteCommand({
@@ -1269,18 +1272,14 @@ export async function listTicketsOfMonths(
   return perMonth.flat();
 }
 
-/** The SLA escalation level of a resolution breach (E2 in requirements 3.7). */
-export const ESCALATION_RESOLUTION_BREACH = 2;
-
 /**
- * Open tickets (ASSIGNED, IN_PROGRESS) whose deadline has passed and whose
- * breach has not been recorded yet, oldest deadline first (SLA-13). One query
- * per team and status on TeamOpenIndex, which projects every attribute, so
- * nothing else is read. The index is eventually consistent, which is safe:
- * markSlaBreached() checks the ticket again before it writes anything.
+ * Every open ticket (ASSIGNED, IN_PROGRESS), oldest deadline first: what the SLA
+ * sweep looks at (SLA-13). One query per team and status on TeamOpenIndex,
+ * which projects every attribute, so nothing else is read. The index is
+ * eventually consistent, which is safe: recordSlaAlert() checks the ticket
+ * again before it writes anything.
  */
-export async function listBreachedTickets(now: Date): Promise<TicketRecord[]> {
-  const nowIso = now.toISOString();
+export async function listOpenTickets(): Promise<TicketRecord[]> {
   const statuses: OpenStatus[] = ['ASSIGNED', 'IN_PROGRESS'];
   const perPartition = await Promise.all(
     TEAM_IDS.flatMap((teamId) =>
@@ -1293,12 +1292,8 @@ export async function listBreachedTickets(now: Date): Promise<TicketRecord[]> {
               TableName: tableName('TICKETS'),
               IndexName: 'TeamOpenIndex',
               KeyConditionExpression: 'teamStatusKey = :key',
-              FilterExpression:
-                'deadlineAt <= :now AND (attribute_not_exists(escalationLevel) OR escalationLevel < :level)',
               ExpressionAttributeValues: {
                 ':key': `TEAM#${teamId}#STATUS#${status}`,
-                ':now': nowIso,
-                ':level': ESCALATION_RESOLUTION_BREACH,
               },
               ExclusiveStartKey: startKey,
             }),
@@ -1324,31 +1319,90 @@ export async function listBreachedTickets(now: Date): Promise<TicketRecord[]> {
 }
 
 /**
- * Records that a ticket passed its resolution deadline (SLA-14, SLA-15): the
- * escalation level on the ticket and an SLA_BREACHED audit event, in one
- * transaction. The notification worker reads the event from the TicketEvents
- * stream and sends the alert, so a failed email is retried there and the
- * breach itself is recorded exactly once.
+ * Records an SLA alert for a ticket (SLA-14, SLA-15, requirements 3.7): a mark
+ * on the ticket and an audit event, in one transaction. The notification
+ * worker reads the event from the TicketEvents stream and sends the email, so a
+ * failed email is retried there and the alert itself is recorded once.
  *
- * The write is conditional on what is true now: the ticket is still open, its
- * deadline has still passed (a priority or team change may have moved it) and
- * the level was not raised yet. Returns false when that is no longer so.
- * The ticket's version is not raised, so a person working on the ticket is
- * never refused because of this write.
+ * | alert                  | event                  | mark on the ticket                              |
+ * | WARNING                | SLA_WARNING            | `slaWarnedAt`                                   |
+ * | RESPONSE_BREACH        | SLA_RESPONSE_BREACHED  | `slaResponseBreachedAt`                         |
+ * | RESOLUTION_BREACH      | SLA_BREACHED           | `slaBreachedAt`, `slaBreachAlerts`, `slaLastBreachAlertAt` |
+ *
+ * The write is conditional on what is true now, so two runs at once, a retry,
+ * or a ticket that was just finished, started, re-prioritised or given another
+ * deadline never produce a second or a wrong alert; it returns false then and
+ * the next run looks again. The ticket's version is not raised, so a person
+ * working on the ticket is never refused because of this write.
  */
-export async function markSlaBreached(
+export async function recordSlaAlert(
   ticket: TicketRecord,
+  alert: SlaAlert,
   now: Date,
 ): Promise<boolean> {
   const nowIso = now.toISOString();
+  const open = '#status IN (:assigned, :inProgress)';
+  const openValues = { ':assigned': 'ASSIGNED', ':inProgress': 'IN_PROGRESS' };
+  let condition: string;
+  let update: string;
+  let values: Record<string, unknown>;
+  let eventId: string;
+  let kind: string;
+  let note: string;
+
+  if (alert.kind === 'WARNING') {
+    kind = 'SLA_WARNING';
+    eventId = `${ticket.id}_sla_warning_c${ticket.repairCycle}`;
+    note = 'Seventy-five percent of the resolution time has passed.';
+    condition = `${open} AND attribute_not_exists(slaWarnedAt) AND deadlineAt = :deadline AND deadlineAt > :now`;
+    update = 'SET slaWarnedAt = :now';
+    values = { ...openValues, ':deadline': ticket.deadlineAt, ':now': nowIso };
+  } else if (alert.kind === 'RESPONSE_BREACH') {
+    kind = 'SLA_RESPONSE_BREACHED';
+    eventId = `${ticket.id}_sla_response_c${ticket.repairCycle}`;
+    note = 'The response target passed while the ticket was still ASSIGNED.';
+    condition =
+      '#status = :assigned AND attribute_not_exists(slaResponseBreachedAt) AND priority = :priority';
+    update = 'SET slaResponseBreachedAt = :now';
+    values = {
+      ':assigned': 'ASSIGNED',
+      ':priority': ticket.priority,
+      ':now': nowIso,
+    };
+  } else if (alert.sent === 0) {
+    kind = 'SLA_BREACHED';
+    eventId = `${ticket.id}_sla_breached_c${ticket.repairCycle}_n1`;
+    note = 'The resolution deadline passed.';
+    condition = `${open} AND deadlineAt <= :now AND attribute_not_exists(slaBreachedAt)`;
+    update =
+      'SET slaBreachedAt = :now, slaBreachAlerts = :next, slaLastBreachAlertAt = :now';
+    values = { ...openValues, ':now': nowIso, ':next': 1 };
+  } else {
+    kind = 'SLA_BREACHED';
+    eventId = `${ticket.id}_sla_breached_c${ticket.repairCycle}_n${alert.sent + 1}`;
+    note = `The resolution deadline passed (reminder ${alert.sent}).`;
+    condition = `${open} AND priority = :critical AND slaBreachAlerts = :sent AND slaLastBreachAlertAt <= :cutoff`;
+    update = 'SET slaBreachAlerts = :next, slaLastBreachAlertAt = :now';
+    values = {
+      ...openValues,
+      ':critical': 'CRITICAL',
+      ':sent': alert.sent,
+      ':next': alert.sent + 1,
+      ':now': nowIso,
+      ':cutoff': new Date(
+        now.getTime() - SLA_REPEAT_MINUTES * 60_000,
+      ).toISOString(),
+    };
+  }
+
   const event: TicketEventRecord = {
-    id: `${ticket.id}_sla_breached_c${ticket.repairCycle}`,
+    id: eventId,
     ticketId: ticket.id,
-    kind: 'SLA_BREACHED',
+    kind,
     occurredAt: nowIso,
     actorType: 'SYSTEM',
     repairCycle: ticket.repairCycle,
-    note: 'The resolution deadline passed.',
+    note,
   };
 
   try {
@@ -1359,16 +1413,10 @@ export async function markSlaBreached(
             Update: {
               TableName: tableName('TICKETS'),
               Key: { ticketId: ticket.id },
-              ConditionExpression:
-                '#status IN (:assigned, :inProgress) AND deadlineAt <= :now AND (attribute_not_exists(escalationLevel) OR escalationLevel < :level)',
-              UpdateExpression: 'SET escalationLevel = :level',
+              ConditionExpression: condition,
+              UpdateExpression: update,
               ExpressionAttributeNames: { '#status': 'status' },
-              ExpressionAttributeValues: {
-                ':assigned': 'ASSIGNED',
-                ':inProgress': 'IN_PROGRESS',
-                ':now': nowIso,
-                ':level': ESCALATION_RESOLUTION_BREACH,
-              },
+              ExpressionAttributeValues: values,
             },
           },
           {

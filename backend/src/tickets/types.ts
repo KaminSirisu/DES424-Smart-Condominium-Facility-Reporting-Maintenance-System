@@ -86,11 +86,22 @@ export interface TicketRecord {
    */
   reopenKey?: string;
   /**
-   * The highest SLA escalation level already raised for the current SLA clock
-   * (requirements 3.7): 2 once the resolution deadline has passed and the
-   * breach was recorded. A reopen removes it with the new clock. Internal.
+   * SLA alerts already raised for the current SLA clock (requirements 3.7), one
+   * conditional write each so an alert is raised once. A reopen removes all of
+   * them with the new clock. Internal.
+   *
+   * `slaWarnedAt`: 75% of the resolution time was used (E0).
+   * `slaResponseBreachedAt`: the response target passed while the ticket was
+   * still ASSIGNED (E1).
+   * `slaBreachedAt`: the resolution deadline passed (E2); `slaBreachAlerts` is
+   * how many E2 alerts were raised (the first, then a CRITICAL ticket's hourly
+   * reminders) and `slaLastBreachAlertAt` when the last one was.
    */
-  escalationLevel?: number;
+  slaWarnedAt?: string;
+  slaResponseBreachedAt?: string;
+  slaBreachedAt?: string;
+  slaBreachAlerts?: number;
+  slaLastBreachAlertAt?: string;
   completedAt?: string;
   /**
    * When the repair was last finished: set when the ticket becomes DONE and
@@ -153,3 +164,14 @@ export interface TicketEventRecord {
   note?: string;
   repairCycle?: number;
 }
+
+/**
+ * An SLA alert the sweep found due for a ticket (requirements 3.7):
+ * WARNING (E0), RESPONSE_BREACH (E1) or RESOLUTION_BREACH (E2). For the last,
+ * `sent` is how many E2 alerts the ticket already had: 0 for the first, then
+ * the count so far for a reminder.
+ */
+export type SlaAlert =
+  | { kind: 'WARNING' }
+  | { kind: 'RESPONSE_BREACH' }
+  | { kind: 'RESOLUTION_BREACH'; sent: number };

@@ -1,46 +1,52 @@
 import {
-  listBreachedTickets,
-  markSlaBreached,
+  listOpenTickets,
+  recordSlaAlert,
 } from '../shared/ticket-repository.js';
+import { dueAlerts } from './alerts.js';
 
 /**
  * The SLA safety net (SLA-13, SCFRMS-42): an EventBridge rule runs this every
- * 5 minutes. It finds open tickets whose resolution deadline has passed and
- * records each breach once (SLA-14): the escalation level on the ticket and an
- * SLA_BREACHED audit event, in one transaction (shared/ticket-repository.ts).
- * The notification worker turns that event into the alert email.
+ * 5 minutes. It reads the open tickets, works out which SLA alerts each owes
+ * (sla/alerts.ts: the warning at 75% of the resolution time, the response
+ * target missed, the deadline passed and a CRITICAL ticket's hourly reminder)
+ * and records each alert once (SLA-14): a mark on the ticket and an audit event,
+ * in one transaction (shared/ticket-repository.ts). The notification worker
+ * turns those events into emails.
  *
- * A failure on one ticket never stops the others: every ticket that can be
+ * A failure on one alert never stops the others: every alert that can be
  * recorded is, and only then is the first error thrown, so the run is reported
- * as failed. Running again is safe, because a breach that was recorded is no
- * longer found, and two runs at once cannot record the same breach twice.
+ * as failed. Running again is safe: an alert that was recorded is no longer
+ * owed, and two runs at once cannot record the same alert twice.
  */
 
 export interface SweepResult {
-  /** Tickets found past their deadline without a recorded breach. */
+  /** Open tickets looked at. */
   checked: number;
-  /** Breaches this run recorded. */
-  breached: number;
+  /** Alerts this run recorded. */
+  recorded: number;
 }
 
 export async function handler(now: Date = new Date()): Promise<SweepResult> {
-  const candidates = await listBreachedTickets(now);
+  const tickets = await listOpenTickets();
 
-  let breached = 0;
+  let recorded = 0;
   const failures: unknown[] = [];
-  for (const ticket of candidates) {
-    try {
-      if (await markSlaBreached(ticket, now)) breached++;
-    } catch (err) {
-      failures.push(err);
-      console.error('Recording an SLA breach failed', {
-        ticketId: ticket.id,
-        err,
-      });
+  for (const ticket of tickets) {
+    for (const alert of dueAlerts(ticket, now)) {
+      try {
+        if (await recordSlaAlert(ticket, alert, now)) recorded++;
+      } catch (err) {
+        failures.push(err);
+        console.error('Recording an SLA alert failed', {
+          ticketId: ticket.id,
+          alert: alert.kind,
+          err,
+        });
+      }
     }
   }
 
-  console.info('SLA sweep done', { checked: candidates.length, breached });
+  console.info('SLA sweep done', { checked: tickets.length, recorded });
   if (failures.length > 0) throw failures[0];
-  return { checked: candidates.length, breached };
+  return { checked: tickets.length, recorded };
 }
