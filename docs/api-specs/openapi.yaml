@@ -371,8 +371,17 @@ paths:
       tags: [Tickets]
       summary: Reopen an unresolved repair
       description: >-
-        An associated reporter may reopen DONE -> ASSIGNED. A REOPENED audit
-        event is recorded. Deadline reset behavior is not approved yet.
+        An associated reporter (a reporter of a merged source ticket included,
+        through the copy of their association on the ticket it was merged
+        into) may reopen a DONE ticket within 7 days of its completion; later
+        it is 409 and a new report is needed. The ticket goes back to ASSIGNED
+        in its team's queue with repairCycle one higher, and a REOPENED audit
+        event is recorded with the optional reason as its note. A new
+        resolution clock starts at the reopen with the same priority (SLA-10):
+        deadlineAt is counted from the reopen time. A ticket that is not DONE
+        is 409, and anyone who is not a reporter of the ticket gets 404.
+        Idempotency-Key is required; a retry of the request that reopened the
+        ticket is 200 and changes nothing.
       operationId: reopenTicket
       security:
         - lineToken: []
@@ -391,6 +400,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -815,8 +825,10 @@ components:
           type: string
           description: >-
             Written so far: CREATED, TRIAGED, STATUS_CHANGED, MERGED (on a
-            merged source) and DUPLICATES_MERGED (on the canonical ticket).
-            STATUS_CHANGED and MERGED carry fromStatus and toStatus. The staff
+            merged source), DUPLICATES_MERGED (on the canonical ticket) and
+            REOPENED (fromStatus DONE, toStatus ASSIGNED, repairCycle of the new
+            cycle, note is the reporter's reason). STATUS_CHANGED, MERGED and
+            REOPENED carry fromStatus and toStatus. The staff
             UI also shows PRIORITY_CHANGED and PRIORITY_CONFIRMED, which the
             priority endpoint writes (fromPriority, toPriority, note), and any
             other kind as it is.
