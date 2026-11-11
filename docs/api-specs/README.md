@@ -23,6 +23,7 @@ There is **no public `/messages` endpoint in this draft**. The stated requiremen
 | `GET /tickets/{ticketId}/events`                  | Staff                                   | Audit history for status, priority, merge, and reopen actions.                                              |
 | `PATCH /tickets/{ticketId}/priority`              | Assigned-team technician or manager     | Confirm or change the priority; a change needs a reason; both write an audit event.                         |
 | `PATCH /tickets/{ticketId}/assignment`            | Manager                                 | Reassign unstarted work to another team with a reason.                                                      |
+| `PATCH /tickets/{ticketId}/triage`                | Manager                                 | Triage by hand a ticket the AI could not classify: choose the team and the priority.                        |
 | `PATCH /tickets/{ticketId}/status`                | Assigned-team technician                | Move work to `IN_PROGRESS` or `DONE`; `DONE` requires uploaded proof.                                       |
 | `POST /tickets/{ticketId}/reopen`                 | Associated reporter                     | Reopen a `DONE` ticket, record why, and notify staff.                                                       |
 | `POST /tickets/{ticketId}/merge`                  | Authorized technician                   | Merge verified same-problem source tickets into this canonical ticket.                                      |

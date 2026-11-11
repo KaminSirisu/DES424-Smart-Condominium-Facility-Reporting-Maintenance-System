@@ -80,8 +80,13 @@ paths:
         associations retained after a merge, newest first. A technician sees
         their team's tickets: ASSIGNED and IN_PROGRESS (the default) oldest
         first, or DONE alone newest completion first. A manager must name the
-        team with teamId. Staff can list only ASSIGNED, IN_PROGRESS or DONE
-        tickets, and DONE cannot be combined with another status (422). A page
+        team with teamId. status=RECEIVED alone, for a manager only (a
+        technician gets 403), lists the tickets waiting for triage, oldest
+        first: the ones the automatic triage could not classify, which have no
+        team, so teamId and location must be left out (400). They are read from
+        the last 3 months (a setting of the deployment). Staff can list only
+        RECEIVED (manager), ASSIGNED, IN_PROGRESS or DONE tickets; DONE and
+        RECEIVED cannot be combined with another status (422). A page
         can hold fewer tickets than limit while nextCursor is present, because
         filters are applied after the index is read; send nextCursor back as it
         is. A ticket ID or filter never bypasses authorization.
@@ -325,6 +330,47 @@ paths:
       responses:
         '200':
           description: Priority updated and audited.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /tickets/{ticketId}/triage:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    patch:
+      tags: [Tickets]
+      summary: Triage a ticket by hand
+      description: >-
+        Manager only; a technician gets 403, because the ticket belongs to no
+        team yet. For a ticket the automatic triage could not classify, which
+        stays RECEIVED (list them with GET /tickets?status=RECEIVED). The manager
+        names the team and the priority; the category is the team's name. It does
+        what the automatic triage does, in one transaction with a TRIAGED event
+        that names the manager (actorType STAFF, actorStaffId) and the reason:
+        the ticket becomes ASSIGNED, gets the team, the priority and a deadline
+        counted from its creation, prioritySetBy is STAFF, and it enters the
+        team's queue. The work order email to the team and the LINE message to
+        the reporter follow as after any triage. Only a RECEIVED ticket can be
+        triaged (409 otherwise, for example when the automatic triage just did
+        it). Asking again for what a manager already set is 200 and writes
+        nothing.
+      operationId: triageTicket
+      security:
+        - staffToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TriageTicket'
+      responses:
+        '200':
+          description: The ticket after triage.
           content:
             application/json:
               schema:
@@ -1005,6 +1051,21 @@ components:
           type: string
           maxLength: 1000
           description: Required when the priority changes; optional when accepting the current one.
+    TriageTicket:
+      type: object
+      additionalProperties: false
+      required: [teamId, priority]
+      properties:
+        teamId:
+          {
+            type: string,
+            description: One of the maintenance teams; also the category.,
+          }
+        priority: { $ref: '#/components/schemas/Priority' }
+        reason:
+          type: string
+          maxLength: 1000
+          description: Why the manager chose them; optional.
     ReassignTicket:
       type: object
       additionalProperties: false
@@ -1070,11 +1131,11 @@ components:
         kind:
           type: string
           description: >-
-            Written so far: CREATED, TRIAGED, STATUS_CHANGED, MERGED (on a
+            Written so far: CREATED, TRIAGED (by the system, or by a manager who triaged by hand: actorType STAFF with actorStaffId), STATUS_CHANGED, MERGED (on a
             merged source), DUPLICATES_MERGED (on the canonical ticket) and
             REOPENED (fromStatus DONE, toStatus ASSIGNED, repairCycle of the new
             cycle, note is the reporter's reason) and REASSIGNED (fromTeamId,
-            toTeamId, note is the manager's reason) and three SLA events written by the system (actorType SYSTEM, repairCycle, note): SLA_WARNING (75% of the resolution time used), SLA_RESPONSE_BREACHED (the response target passed while the ticket was still ASSIGNED) and SLA_BREACHED (the resolution deadline passed while the ticket is still open; a CRITICAL ticket gets another one every hour until it is done). Each is written once per repair cycle, except the SLA_BREACHED reminders. STATUS_CHANGED, MERGED and
+            toTeamId, note is the manager's reason) and four SLA events written by the system (actorType SYSTEM, repairCycle, note): SLA_TRIAGE_DELAYED (the ticket was still RECEIVED, not triaged, 5 minutes after it was created), SLA_WARNING (75% of the resolution time used), SLA_RESPONSE_BREACHED (the response target passed while the ticket was still ASSIGNED) and SLA_BREACHED (the resolution deadline passed while the ticket is still open; a CRITICAL ticket gets another one every hour until it is done). Each is written once per repair cycle, except the SLA_BREACHED reminders. STATUS_CHANGED, MERGED and
             REOPENED carry fromStatus and toStatus. The staff
             UI also shows PRIORITY_CHANGED and PRIORITY_CONFIRMED, which the
             priority endpoint writes (fromPriority, toPriority, note), and any
