@@ -265,10 +265,18 @@ paths:
       tags: [Tickets]
       summary: Change ticket priority with an audit reason
       description: >-
-        A technician on the assigned team or a manager may change priority.
+        A technician on the assigned team or a manager may change priority; a
+        technician of another team gets 403. The reason is required when the
+        priority changes (400 without it) and optional when the current
+        priority is accepted, which the staff UI does with its Accept button.
         The backend records the actor, previous value, new value, reason, and
-        time, and sets prioritySetBy to STAFF. AI classification cannot
-        overwrite a later staff choice.
+        time (PRIORITY_CHANGED, or PRIORITY_CONFIRMED when the value is
+        unchanged), and sets prioritySetBy to STAFF. AI classification cannot
+        overwrite a later staff choice. The deadline is counted again from the
+        start of the SLA clock with the new priority; a downgrade does not
+        reset the clock. Only an ASSIGNED or IN_PROGRESS ticket can change;
+        any other status is 409. Asking again for a priority a person already
+        set is 200 and writes nothing.
       operationId: setTicketPriority
       security:
         - staffToken: []
@@ -734,10 +742,13 @@ components:
     SetPriority:
       type: object
       additionalProperties: false
-      required: [priority, reason]
+      required: [priority]
       properties:
         priority: { $ref: '#/components/schemas/Priority' }
-        reason: { type: string, minLength: 1, maxLength: 1000 }
+        reason:
+          type: string
+          maxLength: 1000
+          description: Required when the priority changes; optional when accepting the current one.
     ReassignTicket:
       type: object
       additionalProperties: false
@@ -807,7 +818,8 @@ components:
             merged source) and DUPLICATES_MERGED (on the canonical ticket).
             STATUS_CHANGED and MERGED carry fromStatus and toStatus. The staff
             UI also shows PRIORITY_CHANGED and PRIORITY_CONFIRMED, which the
-            priority endpoint will write, and any other kind as it is.
+            priority endpoint writes (fromPriority, toPriority, note), and any
+            other kind as it is.
         occurredAt: { type: string, format: date-time }
         actorType: { type: string, enum: [REPORTER, STAFF, SYSTEM] }
         actorStaffId: { type: string }
