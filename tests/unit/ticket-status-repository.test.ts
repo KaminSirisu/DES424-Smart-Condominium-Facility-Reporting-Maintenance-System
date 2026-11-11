@@ -111,6 +111,8 @@ describe('changeTicketStatus', () => {
     expect(items()).toHaveLength(3);
     const [update, event, photo] = items();
     expect(update.Update?.UpdateExpression).toContain('completedAt = :now');
+    // kept when the ticket is reopened, which removes completedAt
+    expect(update.Update?.UpdateExpression).toContain('lastCompletedAt = :now');
     expect(update.Update?.UpdateExpression).toContain('REMOVE teamStatusKey');
     expect(update.Update?.UpdateExpression).toContain(
       'teamDoneKey = :teamDoneKey, completedKey = :completedKey',

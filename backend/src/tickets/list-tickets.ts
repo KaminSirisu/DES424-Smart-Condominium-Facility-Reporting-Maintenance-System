@@ -18,6 +18,7 @@ import {
   encodeCursor,
   OPEN_STATUSES,
   openCursor,
+  parseDate,
   parseLimit,
   scalarParam,
   stringCursor,
@@ -74,19 +75,6 @@ interface Query {
   teamId?: string;
   completedFrom?: string;
   completedTo?: string;
-}
-
-/** A YYYY-MM-DD string that is a real calendar date, else a 400. */
-function parseDate(name: string, value: string): Date {
-  const date = new Date(`${value}T00:00:00.000Z`);
-  if (
-    !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
-    Number.isNaN(date.getTime()) ||
-    date.toISOString().slice(0, 10) !== value
-  ) {
-    throw badRequest(`${name} must be a date as YYYY-MM-DD.`);
-  }
-  return date;
 }
 
 function parseQuery(event: APIGatewayProxyEventV2): Query {

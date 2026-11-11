@@ -409,8 +409,8 @@ export async function changeTicketStatus(
   let update: string;
   if (done) {
     update =
-      'SET #status = :to, completedAt = :now, updatedAt = :now, ' +
-      '#version = #version + :one, teamDoneKey = :teamDoneKey, ' +
+      'SET #status = :to, completedAt = :now, lastCompletedAt = :now, ' +
+      'updatedAt = :now, #version = #version + :one, teamDoneKey = :teamDoneKey, ' +
       'completedKey = :completedKey REMOVE teamStatusKey';
     values[':teamDoneKey'] = `TEAM#${ticket.teamId}`;
     values[':completedKey'] = timeKey(change.now, ticket.id);
@@ -1208,4 +1208,53 @@ export async function reassignTicket(
       ],
     }),
   );
+}
+
+/** The photos of tickets that were read without them (see listTicketsOfMonths). */
+export async function attachPhotos(
+  tickets: TicketRecord[],
+): Promise<TicketRecord[]> {
+  return Promise.all(
+    tickets.map(async (ticket) => ({
+      ...ticket,
+      photos: await getPhotos(ticket.id),
+    })),
+  );
+}
+
+/**
+ * Every ticket created in the given months (`YYYY-MM`), read from
+ * CreatedMonthIndex, which has to project all attributes: the dashboard counts
+ * from these records and does not read the base table. The photos are not
+ * loaded (`photos` is empty; see attachPhotos). Months are read in parallel and
+ * come back in the order given; inside a month the newest ticket comes first.
+ * The index is eventually consistent, which a dashboard accepts.
+ */
+export async function listTicketsOfMonths(
+  months: string[],
+): Promise<TicketRecord[]> {
+  const perMonth = await Promise.all(
+    months.map(async (month) => {
+      const tickets: TicketRecord[] = [];
+      let startKey: Record<string, unknown> | undefined;
+      do {
+        const page = await ddb.send(
+          new QueryCommand({
+            TableName: tableName('TICKETS'),
+            IndexName: 'CreatedMonthIndex',
+            KeyConditionExpression: 'createdMonth = :month',
+            ExpressionAttributeValues: { ':month': month },
+            ScanIndexForward: false,
+            ExclusiveStartKey: startKey,
+          }),
+        );
+        for (const item of page.Items ?? []) {
+          tickets.push(toTicketRecord(item as TicketItem, []));
+        }
+        startKey = page.LastEvaluatedKey;
+      } while (startKey);
+      return tickets;
+    }),
+  );
+  return perMonth.flat();
 }

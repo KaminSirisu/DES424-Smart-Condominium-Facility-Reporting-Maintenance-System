@@ -86,6 +86,13 @@ export interface TicketRecord {
    */
   reopenKey?: string;
   completedAt?: string;
+  /**
+   * When the repair was last finished: set when the ticket becomes DONE and
+   * kept when it is reopened, while `completedAt` is removed (it is present
+   * only while the current cycle is DONE). Internal; the dashboard history
+   * reports it.
+   */
+  lastCompletedAt?: string;
   mergedIntoTicketId?: string;
 
   createdAt: string;
