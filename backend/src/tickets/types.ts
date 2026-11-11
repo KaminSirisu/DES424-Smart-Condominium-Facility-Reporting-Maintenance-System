@@ -114,7 +114,9 @@ export interface TicketEventRecord {
   actorType: 'REPORTER' | 'STAFF' | 'SYSTEM';
   fromStatus?: TicketStatus;
   toStatus?: TicketStatus;
+  fromPriority?: Priority;
   toPriority?: Priority;
+  fromTeamId?: string;
   toTeamId?: string;
   /** The staff account that did it (openapi TicketEvent.actorStaffId). */
   actorStaffId?: string;

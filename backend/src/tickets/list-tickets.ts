@@ -13,6 +13,15 @@ import {
 } from '../shared/ticket-repository.js';
 import { isTeamId } from '../triage/policy.js';
 import { errorResponse, json } from './staff-http.js';
+import {
+  badRequest,
+  decodeCursor,
+  encodeCursor,
+  isKeyString,
+  parseLimit,
+  scalarParam,
+  stringCursor,
+} from './paging.js';
 import { identifyCaller } from './ticket-access.js';
 import { toTicketView } from './ticket-view.js';
 import { ApiError, type TicketRecord, type TicketStatus } from './types.js';
@@ -39,10 +48,6 @@ import { ApiError, type TicketRecord, type TicketStatus } from './types.js';
  * fewer than `limit` tickets while `nextCursor` is present, because filters are
  * applied after the index is read. The cursor is opaque; send it back as is.
  */
-
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 100;
-const CURSOR_MAX_LENGTH = 1000;
 
 const STATUSES: TicketStatus[] = [
   'RECEIVED',
@@ -72,23 +77,6 @@ interface Query {
   completedTo?: string;
 }
 
-function badRequest(message: string): ApiError {
-  return new ApiError(400, 'BAD_REQUEST', message);
-}
-
-function encodeCursor(value: unknown): string {
-  return Buffer.from(JSON.stringify(value)).toString('base64url');
-}
-
-function decodeCursor(raw: string): unknown {
-  if (raw.length > CURSOR_MAX_LENGTH) throw badRequest('cursor is not valid.');
-  try {
-    return JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-  } catch {
-    throw badRequest('cursor is not valid.');
-  }
-}
-
 /** A YYYY-MM-DD string that is a real calendar date, else a 400. */
 function parseDate(name: string, value: string): Date {
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -110,20 +98,10 @@ function parseQuery(event: APIGatewayProxyEventV2): Query {
       throw badRequest(`Unknown query parameter: ${name}.`);
     }
   }
-  const scalar = (name: string): string | undefined => {
-    const values = params.getAll(name);
-    if (values.length > 1) throw badRequest(`${name} may be given once.`);
-    return values[0];
-  };
+  const scalar = (name: string): string | undefined =>
+    scalarParam(params, name);
 
-  let limit = DEFAULT_LIMIT;
-  const rawLimit = scalar('limit');
-  if (rawLimit !== undefined) {
-    limit = Number(rawLimit);
-    if (!/^\d+$/.test(rawLimit) || limit < 1 || limit > MAX_LIMIT) {
-      throw badRequest(`limit must be a whole number from 1 to ${MAX_LIMIT}.`);
-    }
-  }
+  const limit = parseLimit(scalar('limit'));
 
   const rawStatuses = params.getAll('status');
   const statuses = rawStatuses.length
@@ -145,22 +123,6 @@ function parseQuery(event: APIGatewayProxyEventV2): Query {
     completedFrom: scalar('completedFrom'),
     completedTo: scalar('completedTo'),
   };
-}
-
-function isKeyString(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    value !== '' &&
-    value.length <= CURSOR_MAX_LENGTH
-  );
-}
-
-/** The one string a reporter or completed-list cursor holds under `field`. */
-function stringCursor(cursor: unknown, field: string): string | undefined {
-  if (cursor === undefined) return undefined;
-  const value = (cursor as Record<string, unknown> | null)?.[field];
-  if (!isKeyString(value)) throw badRequest('cursor is not valid.');
-  return value;
 }
 
 function openCursor(cursor: unknown): OpenPosition {

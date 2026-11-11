@@ -893,3 +893,47 @@ export async function listCompletedTickets(
   }
   return { tickets, next: upperKey };
 }
+
+function fromEventItem(item: EventItem): TicketEventRecord {
+  return omit(item, ['eventKey']) as unknown as TicketEventRecord;
+}
+
+export interface TicketEventPage {
+  events: TicketEventRecord[];
+  /** The `eventKey` to continue after; absent on the last page. */
+  next?: string;
+}
+
+/**
+ * A ticket's audit events in time order (TicketEvents, strongly consistent).
+ * `after` is the `next` of the previous page. One more event than `limit` is
+ * read to know whether there is a next page, so the last page has no `next`.
+ */
+export async function listTicketEvents(
+  ticketId: string,
+  options: { limit: number; after?: string },
+): Promise<TicketEventPage> {
+  const page = await ddb.send(
+    new QueryCommand({
+      TableName: tableName('TICKET_EVENTS'),
+      KeyConditionExpression: options.after
+        ? 'ticketId = :ticketId AND eventKey > :after'
+        : 'ticketId = :ticketId',
+      ExpressionAttributeValues: {
+        ':ticketId': ticketId,
+        ...(options.after ? { ':after': options.after } : {}),
+      },
+      ConsistentRead: true,
+      ScanIndexForward: true,
+      Limit: options.limit + 1,
+    }),
+  );
+  const items = (page.Items ?? []) as EventItem[];
+  const shown = items.slice(0, options.limit);
+  return {
+    events: shown.map(fromEventItem),
+    ...(items.length > options.limit
+      ? { next: shown[shown.length - 1].eventKey }
+      : {}),
+  };
+}
