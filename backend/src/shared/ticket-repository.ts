@@ -1331,6 +1331,7 @@ export async function listOpenTickets(): Promise<TicketRecord[]> {
  * failed email is retried there and the alert itself is recorded once.
  *
  * | alert                  | event                  | mark on the ticket                              |
+ * | TRIAGE_DELAYED         | SLA_TRIAGE_DELAYED     | `slaTriageDelayedAt`                            |
  * | WARNING                | SLA_WARNING            | `slaWarnedAt`                                   |
  * | RESPONSE_BREACH        | SLA_RESPONSE_BREACHED  | `slaResponseBreachedAt`                         |
  * | RESOLUTION_BREACH      | SLA_BREACHED           | `slaBreachedAt`, `slaBreachAlerts`, `slaLastBreachAlertAt` |
@@ -1356,7 +1357,15 @@ export async function recordSlaAlert(
   let kind: string;
   let note: string;
 
-  if (alert.kind === 'WARNING') {
+  if (alert.kind === 'TRIAGE_DELAYED') {
+    kind = 'SLA_TRIAGE_DELAYED';
+    eventId = `${ticket.id}_sla_triage_delayed`;
+    note = 'The ticket was not triaged within the triage delay.';
+    condition =
+      '#status = :received AND attribute_not_exists(slaTriageDelayedAt)';
+    update = 'SET slaTriageDelayedAt = :now';
+    values = { ':received': 'RECEIVED', ':now': nowIso };
+  } else if (alert.kind === 'WARNING') {
     kind = 'SLA_WARNING';
     eventId = `${ticket.id}_sla_warning_c${ticket.repairCycle}`;
     note = 'Seventy-five percent of the resolution time has passed.';

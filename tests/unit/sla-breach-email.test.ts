@@ -192,6 +192,87 @@ describe('buildSlaBreachEmail for a missed response target', () => {
   });
 });
 
+describe('buildSlaBreachEmail for a ticket waiting for triage', () => {
+  // Created 05:30 UTC, i.e. 12:30 in Bangkok; NOW is 10:35 UTC, 5 h 5 min later.
+  const waiting = (overrides: Partial<TicketRecord> = {}) =>
+    ticket({
+      status: 'RECEIVED',
+      teamId: undefined,
+      category: undefined,
+      priority: undefined,
+      deadlineAt: undefined,
+      ...overrides,
+    });
+
+  it('says what is wrong and what a manager has to do', () => {
+    const { subject, text } = buildSlaBreachEmail(
+      waiting(),
+      NOW,
+      'SLA_TRIAGE_DELAYED',
+    );
+    expect(subject).toBe('[SLA triage] ticket tkt_1 is waiting for triage');
+    expect(text).toContain('has not been triaged within 5 min');
+    expect(text).toContain('no team and no deadline');
+    expect(text).toContain('Ticket:    tkt_1');
+    expect(text).toContain('Location:  Beside the lobby elevator');
+    expect(text).toContain('Received:  2026-11-11 12:30 (Asia/Bangkok)');
+    expect(text).toContain('Waiting:   5 h 5 min');
+    expect(text).toContain('Choose a team and a priority');
+    expect(text).not.toContain('View ticket');
+  });
+
+  it('does not need a team, a priority or a deadline', () => {
+    expect(() =>
+      buildSlaBreachEmail(waiting(), NOW, 'SLA_TRIAGE_DELAYED'),
+    ).not.toThrow();
+  });
+
+  it('links to the ticket when the dashboard address is known', () => {
+    const { text } = buildSlaBreachEmail(
+      waiting(),
+      NOW,
+      'SLA_TRIAGE_DELAYED',
+      'https://admin.example.com/',
+    );
+    expect(text).toContain(
+      'View ticket: https://admin.example.com/tickets/tkt_1',
+    );
+  });
+
+  it('never has the reporter or the description', () => {
+    const { subject, text } = buildSlaBreachEmail(
+      waiting(),
+      NOW,
+      'SLA_TRIAGE_DELAYED',
+    );
+    expect(text).not.toContain('Uabc123secret');
+    expect(text).not.toContain('0812345678');
+    expect(text).not.toContain('Water is leaking');
+    expect(subject).not.toContain('lobby');
+  });
+
+  it('is sent to the supervisor like the other alerts', async () => {
+    vi.stubEnv('SES_SENDER_EMAIL', 'noreply@example.com');
+    const sender: EmailSender & { send: ReturnType<typeof vi.fn> } = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+    await sendSlaBreachEmail(
+      waiting(),
+      'boss@example.com',
+      'SLA_TRIAGE_DELAYED',
+      NOW,
+      sender,
+    );
+    expect(sender.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'boss@example.com',
+        subject: '[SLA triage] ticket tkt_1 is waiting for triage',
+      }),
+    );
+    vi.unstubAllEnvs();
+  });
+});
+
 describe('sendSlaBreachEmail', () => {
   beforeEach(() => {
     vi.stubEnv('SES_SENDER_EMAIL', 'noreply@example.com');

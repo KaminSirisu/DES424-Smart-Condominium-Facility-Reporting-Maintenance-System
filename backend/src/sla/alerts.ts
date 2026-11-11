@@ -3,16 +3,19 @@ import {
   SLA_REPEAT_MINUTES,
   SLA_WARNING_SHARE,
   slaStartOf,
+  TRIAGE_DELAY_MINUTES,
 } from '../triage/policy.js';
 import type { SlaAlert, TicketRecord } from '../tickets/types.js';
 
 /**
  * Which SLA alerts a ticket owes right now (requirements 3.7), worked out from
  * the ticket and the time alone, so the sweep and its tests need no database.
- * Only open tickets (ASSIGNED, IN_PROGRESS) owe anything; the clock stops at
- * DONE or MERGED (SLA-11). An alert already raised for the current SLA clock
+ * Only open tickets (RECEIVED, ASSIGNED, IN_PROGRESS) owe anything; the clock
+ * stops at DONE or MERGED (SLA-11). An alert already raised for the current SLA clock
  * (the `sla...` fields of the ticket) is not owed again.
  *
+ *  - TRIAGE_DELAYED: a RECEIVED ticket, not triaged TRIAGE_DELAY_MINUTES after
+ *    it was created (SLA-06). A NaN creation time owes nothing.
  *  - WARNING (E0): 75% of the resolution time, from the start of the SLA clock
  *    to `deadlineAt`, has been used and the deadline has not passed yet. A
  *    ticket first seen after its deadline gets the breach alert instead.
@@ -26,6 +29,15 @@ import type { SlaAlert, TicketRecord } from '../tickets/types.js';
  * alerts first.
  */
 export function dueAlerts(ticket: TicketRecord, now: Date): SlaAlert[] {
+  if (ticket.status === 'RECEIVED') {
+    // No team and no deadline yet: the only thing owed is the triage delay,
+    // counted from creation (SLA-06).
+    const created = Date.parse(ticket.createdAt);
+    return !ticket.slaTriageDelayedAt &&
+      now.getTime() >= created + TRIAGE_DELAY_MINUTES * 60_000
+      ? [{ kind: 'TRIAGE_DELAYED' }]
+      : [];
+  }
   if (ticket.status !== 'ASSIGNED' && ticket.status !== 'IN_PROGRESS') {
     return [];
   }

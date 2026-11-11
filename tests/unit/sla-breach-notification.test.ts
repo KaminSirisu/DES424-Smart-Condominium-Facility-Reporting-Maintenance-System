@@ -60,6 +60,7 @@ describe('the supervisors channel', () => {
     expect(emailSupervisorsChannel.kinds).toEqual([
       'SLA_BREACHED',
       'SLA_RESPONSE_BREACHED',
+      'SLA_TRIAGE_DELAYED',
     ]);
   });
 
@@ -121,6 +122,30 @@ describe('the supervisors channel', () => {
       ticket,
       'boss@example.com',
       'SLA_RESPONSE_BREACHED',
+    );
+  });
+
+  it('tells the email when the alert is a ticket waiting for triage, and falls back to the breach for any other kind', async () => {
+    vi.mocked(sendSlaBreachEmail).mockResolvedValue(undefined);
+    await emailSupervisorsChannel.send(ticket, 'boss@example.com', {
+      ticketId: 'tkt_1',
+      eventId: 'e3',
+      kind: 'SLA_TRIAGE_DELAYED',
+    });
+    expect(sendSlaBreachEmail).toHaveBeenLastCalledWith(
+      ticket,
+      'boss@example.com',
+      'SLA_TRIAGE_DELAYED',
+    );
+    await emailSupervisorsChannel.send(ticket, 'boss@example.com', {
+      ticketId: 'tkt_1',
+      eventId: 'e4',
+      kind: 'SOMETHING_ELSE',
+    });
+    expect(sendSlaBreachEmail).toHaveBeenLastCalledWith(
+      ticket,
+      'boss@example.com',
+      'SLA_BREACHED',
     );
   });
 

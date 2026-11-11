@@ -134,6 +134,40 @@ describe('recordSlaAlert', () => {
   const OPEN_VALUES = { ':assigned': 'ASSIGNED', ':inProgress': 'IN_PROGRESS' };
   const sent = () => send.mock.calls[0][0].input.TransactItems;
 
+  it('records a ticket that waited too long for triage: a mark and an SLA_TRIAGE_DELAYED event, only while it is still RECEIVED', async () => {
+    send.mockResolvedValue({});
+
+    await expect(
+      recordSlaAlert(
+        ticket({ status: 'RECEIVED', teamId: undefined }),
+        { kind: 'TRIAGE_DELAYED' },
+        NOW,
+      ),
+    ).resolves.toBe(true);
+
+    const [update, put] = sent();
+    expect(update.Update).toEqual({
+      TableName: 'TestTickets',
+      Key: { ticketId: 'tkt_1' },
+      ConditionExpression:
+        '#status = :received AND attribute_not_exists(slaTriageDelayedAt)',
+      UpdateExpression: 'SET slaTriageDelayedAt = :now',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: { ':received': 'RECEIVED', ':now': NOW_ISO },
+    });
+    expect(put.Put.TableName).toBe('TestEvents');
+    expect(put.Put.Item).toMatchObject({
+      id: 'tkt_1_sla_triage_delayed',
+      ticketId: 'tkt_1',
+      kind: 'SLA_TRIAGE_DELAYED',
+      occurredAt: NOW_ISO,
+      actorType: 'SYSTEM',
+      note: 'The ticket was not triaged within the triage delay.',
+      eventKey: `${NOW_ISO}#tkt_1_sla_triage_delayed`,
+    });
+    expect(update.Update.UpdateExpression).not.toContain('version');
+  });
+
   it('records the warning (E0): a mark and an SLA_WARNING event, one transaction', async () => {
     send.mockResolvedValue({});
 

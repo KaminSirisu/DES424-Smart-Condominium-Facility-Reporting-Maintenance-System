@@ -93,6 +93,13 @@ export function responseMinutes(priority: Priority): number {
   return RESPONSE_MINUTES[priority];
 }
 
+/**
+ * A ticket still RECEIVED, not triaged, this many minutes after it was created
+ * goes to the managers' attention (SLA-06): the automatic triage normally
+ * takes seconds.
+ */
+export const TRIAGE_DELAY_MINUTES = 5;
+
 /** The warning (E0) comes when this share of the resolution time is used. */
 export const SLA_WARNING_SHARE = 0.75;
 

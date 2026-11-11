@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../backend/src/shared/ticket-repository', () => ({
+  listAllReceivedTickets: vi.fn(),
   listOpenTickets: vi.fn(),
   recordSlaAlert: vi.fn(),
 }));
@@ -10,6 +11,7 @@ import { handler as entry } from '../../backend/src/handlers/sla-sweep-entry';
 import { dueAlerts } from '../../backend/src/sla/alerts';
 import { handler } from '../../backend/src/sla/sweep-breaches';
 import {
+  listAllReceivedTickets,
   listOpenTickets,
   recordSlaAlert,
 } from '../../backend/src/shared/ticket-repository';
@@ -17,6 +19,7 @@ import type { TicketRecord } from '../../backend/src/tickets/types';
 
 const NOW = new Date('2026-11-11T10:00:00.000Z');
 const list = vi.mocked(listOpenTickets);
+const listWaiting = vi.mocked(listAllReceivedTickets);
 const record = vi.mocked(recordSlaAlert);
 const due = vi.mocked(dueAlerts);
 
@@ -27,6 +30,7 @@ const breach = { kind: 'RESOLUTION_BREACH', sent: 0 } as const;
 
 beforeEach(() => {
   vi.resetAllMocks();
+  listWaiting.mockResolvedValue([]);
   vi.spyOn(console, 'info').mockImplementation(() => undefined);
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
 });
@@ -50,6 +54,40 @@ describe('SLA sweep', () => {
       ['a', breach, NOW],
       ['b', warning, NOW],
     ]);
+  });
+
+  it('also looks at the tickets waiting for triage, first, over the last three months', async () => {
+    list.mockResolvedValue([t('open')]);
+    listWaiting.mockResolvedValue([t('waiting')]);
+    due.mockImplementation((ticket) =>
+      ticket.id === 'waiting' ? [{ kind: 'TRIAGE_DELAYED' }] : [],
+    );
+    record.mockResolvedValue(true);
+
+    await expect(handler(NOW)).resolves.toEqual({ checked: 2, recorded: 1 });
+
+    expect(listWaiting).toHaveBeenCalledWith(['2026-09', '2026-10', '2026-11']);
+    expect(due.mock.calls.map((c) => c[0].id)).toEqual(['waiting', 'open']);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'waiting' }),
+      { kind: 'TRIAGE_DELAYED' },
+      NOW,
+    );
+  });
+
+  it('still records the alerts of the open tickets when the waiting tickets cannot be read, then reports it', async () => {
+    list.mockResolvedValue([t('open')]);
+    listWaiting.mockRejectedValue(new Error('index not allowed'));
+    due.mockReturnValue([warning]);
+    record.mockResolvedValue(true);
+
+    await expect(handler(NOW)).rejects.toThrow('index not allowed');
+
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(
+      'Reading the tickets waiting for triage failed',
+      expect.anything(),
+    );
   });
 
   it('counts only the alerts it recorded itself', async () => {

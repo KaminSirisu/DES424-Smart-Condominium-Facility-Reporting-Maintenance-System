@@ -6,9 +6,10 @@ import { sendSlaBreachEmail } from './sla-breach-email.js';
 /**
  * The SLA breach alert (SCFRMS-42): when the sweep records an SLA_BREACHED
  * event (the resolution deadline passed, with the hourly reminders of a
- * CRITICAL ticket) or an SLA_RESPONSE_BREACHED event (the response target
- * passed with the ticket still ASSIGNED), every active MANAGER account gets an
- * email (the "supervisor" and
+ * CRITICAL ticket), an SLA_RESPONSE_BREACHED event (the response target
+ * passed with the ticket still ASSIGNED) or an SLA_TRIAGE_DELAYED event (the
+ * ticket was not triaged within the triage delay), every active MANAGER
+ * account gets an email (the "supervisor" and
  * "Juristic Manager" of requirements 3.7). The addresses are the managers'
  * login emails in the Accounts table, so adding, disabling or removing a
  * manager through the account endpoints changes who is alerted, with no
@@ -31,7 +32,7 @@ export async function activeManagerEmails(
 
 export const emailSupervisorsChannel: NotificationChannel = {
   name: 'EMAIL_SUPERVISORS',
-  kinds: ['SLA_BREACHED', 'SLA_RESPONSE_BREACHED'],
+  kinds: ['SLA_BREACHED', 'SLA_RESPONSE_BREACHED', 'SLA_TRIAGE_DELAYED'],
   recipients: async (ticket) => {
     const emails = await activeManagerEmails();
     if (emails.length === 0) {
@@ -45,8 +46,9 @@ export const emailSupervisorsChannel: NotificationChannel = {
     await sendSlaBreachEmail(
       ticket,
       recipient,
-      event.kind === 'SLA_RESPONSE_BREACHED'
-        ? 'SLA_RESPONSE_BREACHED'
+      event.kind === 'SLA_RESPONSE_BREACHED' ||
+        event.kind === 'SLA_TRIAGE_DELAYED'
+        ? event.kind
         : 'SLA_BREACHED',
     );
     return true;

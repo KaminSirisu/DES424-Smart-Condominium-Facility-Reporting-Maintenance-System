@@ -1,5 +1,9 @@
 import type { TicketRecord } from '../tickets/types.js';
-import { responseMinutes, slaStartOf } from '../triage/policy.js';
+import {
+  responseMinutes,
+  slaStartOf,
+  TRIAGE_DELAY_MINUTES,
+} from '../triage/policy.js';
 import {
   formatBangkok,
   sesSender,
@@ -8,10 +12,11 @@ import {
 
 /**
  * The alert for a ticket that missed an SLA target (SCFRMS-42, SLA-15, E1 and
- * E2 of requirements 3.7), sent by email to the supervisors: either the
- * resolution deadline passed (SLA_BREACHED, also the hourly reminders for a
- * CRITICAL ticket) or the response target passed with the ticket still ASSIGNED
- * (SLA_RESPONSE_BREACHED). It holds
+ * E2 of requirements 3.7), sent by email to the supervisors: the resolution
+ * deadline passed (SLA_BREACHED, also the hourly reminders for a CRITICAL
+ * ticket), the response target passed with the ticket still ASSIGNED
+ * (SLA_RESPONSE_BREACHED), or the ticket was not triaged within the triage
+ * delay (SLA_TRIAGE_DELAYED, SLA-06; it has no team or priority yet). It holds
  * what the requirements list: the ticket id, the location, the category, the
  * priority, how long it is overdue and the assigned team. It never holds the
  * reporter's LINE user id, and neither the description nor anything else the
@@ -34,7 +39,8 @@ export function formatDuration(milliseconds: number): string {
   return `${rest} min`;
 }
 
-export type SlaAlertKind = 'SLA_BREACHED' | 'SLA_RESPONSE_BREACHED';
+export type SlaAlertKind =
+  'SLA_BREACHED' | 'SLA_RESPONSE_BREACHED' | 'SLA_TRIAGE_DELAYED';
 
 export function buildSlaBreachEmail(
   ticket: TicketRecord,
@@ -56,6 +62,34 @@ export function buildSlaBreachEmail(
   ];
   let subjectLabel: string;
   let lines: string[];
+
+  if (kind === 'SLA_TRIAGE_DELAYED') {
+    // No team, priority or deadline yet: say what a manager has to do.
+    return {
+      subject: `[SLA triage] ticket ${ticket.id} is waiting for triage`,
+      text:
+        [
+          'A ticket has not been triaged within ' +
+            `${formatDuration(TRIAGE_DELAY_MINUTES * 60_000)}: the automatic triage ` +
+            'could not classify it or is stuck. It has no team and no deadline ' +
+            'until a manager triages it.',
+          '',
+          `Ticket:    ${ticket.id}`,
+          `Location:  ${ticket.location}`,
+          `Received:  ${formatBangkok(ticket.createdAt)} (Asia/Bangkok)`,
+          `Waiting:   ${formatDuration(now.getTime() - Date.parse(ticket.createdAt))}`,
+          '',
+          'Choose a team and a priority for it in the staff portal (the list of ' +
+            'tickets waiting for triage).',
+          ...(dashboardUrl
+            ? [
+                '',
+                `View ticket: ${dashboardUrl.replace(/\/+$/, '')}/tickets/${ticket.id}`,
+              ]
+            : []),
+        ].join('\n') + '\n',
+    };
+  }
 
   if (kind === 'SLA_RESPONSE_BREACHED') {
     if (!ticket.priority) {

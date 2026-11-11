@@ -15,6 +15,7 @@ import {
   SLA_REPEAT_MINUTES,
   SLA_WARNING_SHARE,
   slaStartOf,
+  TRIAGE_DELAY_MINUTES,
 } from '../../backend/src/triage/policy';
 
 describe('triage policy', () => {
@@ -44,6 +45,7 @@ describe('triage policy', () => {
     expect(responseMinutes('LOW')).toBe(1440);
     expect(SLA_WARNING_SHARE).toBe(0.75);
     expect(SLA_REPEAT_MINUTES).toBe(60);
+    expect(TRIAGE_DELAY_MINUTES).toBe(5);
     expect(SLA_POLICY_VERSION).toBe(2);
   });
 

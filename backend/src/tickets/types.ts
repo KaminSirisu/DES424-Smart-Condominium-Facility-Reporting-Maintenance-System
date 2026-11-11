@@ -89,6 +89,9 @@ export interface TicketRecord {
    * conditional write each so an alert is raised once. A reopen removes all of
    * them with the new clock. Internal.
    *
+   * `slaTriageDelayedAt`: the ticket was still RECEIVED, not triaged, after
+   * the triage delay (SLA-06); a ticket is never RECEIVED again, so it is
+   * raised once and never cleared.
    * `slaWarnedAt`: 75% of the resolution time was used (E0).
    * `slaResponseBreachedAt`: the response target passed while the ticket was
    * still ASSIGNED (E1).
@@ -96,6 +99,7 @@ export interface TicketRecord {
    * how many E2 alerts were raised (the first, then a CRITICAL ticket's hourly
    * reminders) and `slaLastBreachAlertAt` when the last one was.
    */
+  slaTriageDelayedAt?: string;
   slaWarnedAt?: string;
   slaResponseBreachedAt?: string;
   slaBreachedAt?: string;
@@ -166,11 +170,12 @@ export interface TicketEventRecord {
 
 /**
  * An SLA alert the sweep found due for a ticket (requirements 3.7):
- * WARNING (E0), RESPONSE_BREACH (E1) or RESOLUTION_BREACH (E2). For the last,
+ * TRIAGE_DELAYED (still RECEIVED after the triage delay, SLA-06), WARNING (E0), RESPONSE_BREACH (E1) or RESOLUTION_BREACH (E2). For the last,
  * `sent` is how many E2 alerts the ticket already had: 0 for the first, then
  * the count so far for a reminder.
  */
 export type SlaAlert =
+  | { kind: 'TRIAGE_DELAYED' }
   | { kind: 'WARNING' }
   | { kind: 'RESPONSE_BREACH' }
   | { kind: 'RESOLUTION_BREACH'; sent: number };

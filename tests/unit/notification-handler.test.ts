@@ -24,7 +24,7 @@ vi.mock('../../backend/src/notifications/line-notification', () => ({
 vi.mock('../../backend/src/notifications/sla-breach-notification', () => ({
   emailSupervisorsChannel: {
     name: 'EMAIL_SUPERVISORS',
-    kinds: ['SLA_BREACHED', 'SLA_RESPONSE_BREACHED'],
+    kinds: ['SLA_BREACHED', 'SLA_RESPONSE_BREACHED', 'SLA_TRIAGE_DELAYED'],
     recipients: vi.fn(),
     send: vi.fn(),
   },
@@ -187,6 +187,22 @@ describe('notification stream handler', () => {
       ticketId: 'tkt_1',
       eventId: 'tkt_1_sla_response_breached',
       kind: 'SLA_RESPONSE_BREACHED',
+    });
+    expect(warningSend).not.toHaveBeenCalled();
+    expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).not.toHaveBeenCalled();
+  });
+
+  it('alerts the supervisors, and no one else, when a ticket waits too long for triage', async () => {
+    supervisorRecipients.mockResolvedValue(['a@example.com']);
+    supervisorSend.mockResolvedValue(true);
+
+    await handler(eventOf(record('SLA_TRIAGE_DELAYED', '1')));
+
+    expect(supervisorSend).toHaveBeenCalledWith(ticket(), 'a@example.com', {
+      ticketId: 'tkt_1',
+      eventId: 'tkt_1_sla_triage_delayed',
+      kind: 'SLA_TRIAGE_DELAYED',
     });
     expect(warningSend).not.toHaveBeenCalled();
     expect(sendWorkOrderEmail).not.toHaveBeenCalled();

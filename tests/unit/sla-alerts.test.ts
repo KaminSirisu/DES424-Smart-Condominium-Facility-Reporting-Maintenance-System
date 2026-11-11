@@ -30,6 +30,44 @@ function ticket(overrides: Partial<TicketRecord> = {}): TicketRecord {
 const kinds = (t: TicketRecord, minutes: number) =>
   dueAlerts(t, at(minutes)).map((a) => a.kind);
 
+describe('dueAlerts for a ticket waiting for triage (SLA-06)', () => {
+  const waiting = (overrides: Partial<TicketRecord> = {}) =>
+    ticket({
+      status: 'RECEIVED',
+      teamId: undefined,
+      category: undefined,
+      priority: undefined,
+      deadlineAt: undefined,
+      ...overrides,
+    });
+
+  it('owes nothing in the first five minutes', () => {
+    expect(dueAlerts(waiting(), at(0))).toEqual([]);
+    expect(dueAlerts(waiting(), new Date(START + 5 * MIN - 1))).toEqual([]);
+  });
+
+  it('owes the triage delay alert from five minutes after creation', () => {
+    expect(dueAlerts(waiting(), at(5))).toEqual([{ kind: 'TRIAGE_DELAYED' }]);
+    expect(dueAlerts(waiting(), at(600))).toEqual([{ kind: 'TRIAGE_DELAYED' }]);
+  });
+
+  it('owes it once', () => {
+    expect(dueAlerts(waiting({ slaTriageDelayedAt: iso(6) }), at(600))).toEqual(
+      [],
+    );
+  });
+
+  it('owes nothing else: no warning, response or breach without a team and a deadline', () => {
+    expect(dueAlerts(waiting(), at(100_000))).toEqual([
+      { kind: 'TRIAGE_DELAYED' },
+    ]);
+  });
+
+  it('counts from creation and owes nothing for a creation time that cannot be read', () => {
+    expect(dueAlerts(waiting({ createdAt: 'then' }), at(600))).toEqual([]);
+  });
+});
+
 describe('dueAlerts', () => {
   it('owes nothing early in the clock', () => {
     expect(dueAlerts(ticket(), at(0))).toEqual([]);
@@ -171,7 +209,7 @@ describe('dueAlerts', () => {
   });
 
   describe('a ticket that owes nothing', () => {
-    it.each(['RECEIVED', 'DONE', 'MERGED'] as const)(
+    it.each(['DONE', 'MERGED'] as const)(
       'is %s: the clock is not running',
       (status) => {
         expect(dueAlerts(ticket({ status }), at(10_000))).toEqual([]);
