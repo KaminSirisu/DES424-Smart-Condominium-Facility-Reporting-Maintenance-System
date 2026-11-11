@@ -19,7 +19,6 @@ function triaged(overrides: Partial<TicketRecord> = {}): TicketRecord {
     version: 2,
     reporterLineUserId: 'Uabc123',
     category: 'PLUMBING',
-    suggestedPriority: 'CRITICAL',
     priority: 'CRITICAL',
     teamId: 'PLUMBING',
     deadlineAt: '2026-10-29T07:00:00.000Z',

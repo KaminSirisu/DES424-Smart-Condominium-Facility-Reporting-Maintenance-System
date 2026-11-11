@@ -462,7 +462,6 @@ describe('getTicket', () => {
 describe('applyTriage', () => {
   const update: TriageUpdate = {
     category: 'PLUMBING',
-    suggestedPriority: 'MEDIUM',
     priority: 'MEDIUM',
     teamId: 'PLUMBING',
     deadlineAt: '2026-10-29T10:00:00.000Z',
@@ -488,6 +487,11 @@ describe('applyTriage', () => {
     expect(ticketUpdate.Update?.UpdateExpression).toContain(
       'prioritySetBy = :prioritySetBy',
     );
+    // The matrix result is not kept next to the priority any more.
+    expect(ticketUpdate.Update?.UpdateExpression).not.toContain('suggested');
+    expect(
+      JSON.stringify(ticketUpdate.Update?.ExpressionAttributeValues),
+    ).not.toContain(':suggested');
     expect(eventPut.Put?.TableName).toBe('TestEvents');
     expect(eventPut.Put?.Item).toMatchObject({
       ticketId: 'tkt_1',

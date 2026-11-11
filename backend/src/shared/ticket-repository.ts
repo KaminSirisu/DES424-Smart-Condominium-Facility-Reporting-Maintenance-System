@@ -265,7 +265,6 @@ export async function createTicket(
 
 export interface TriageUpdate {
   category: string;
-  suggestedPriority: Priority;
   priority: Priority;
   teamId: string;
   deadlineAt: string;
@@ -317,7 +316,7 @@ export async function applyTriage(
             ConditionExpression: '#status = :received AND #version = :version',
             UpdateExpression:
               'SET #status = :assigned, category = :category, ' +
-              'suggestedPriority = :suggested, priority = :priority, ' +
+              'priority = :priority, ' +
               'teamId = :teamId, deadlineAt = :deadlineAt, ' +
               'slaPolicyVersion = :policy, triagedAt = :now, ' +
               'updatedAt = :now, #version = #version + :one, ' +
@@ -333,7 +332,6 @@ export async function applyTriage(
               ':version': expectedVersion,
               ':one': 1,
               ':category': update.category,
-              ':suggested': update.suggestedPriority,
               ':priority': update.priority,
               ':teamId': update.teamId,
               ':deadlineAt': update.deadlineAt,

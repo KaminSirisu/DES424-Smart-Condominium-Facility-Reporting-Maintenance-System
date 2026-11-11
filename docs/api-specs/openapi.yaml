@@ -923,7 +923,6 @@ components:
           description: Starts at 1 and increments when a completed ticket reopens.
         category:
           { type: string, description: Maintenance domain after triage. }
-        suggestedPriority: { $ref: '#/components/schemas/Priority' }
         priority: { $ref: '#/components/schemas/Priority' }
         prioritySetBy:
           type: string

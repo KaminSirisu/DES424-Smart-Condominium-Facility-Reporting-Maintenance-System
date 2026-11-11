@@ -41,7 +41,7 @@ export interface StoredTicketPhoto extends TicketPhoto {
  *
  * On creation (this module), only id/location/description/status/
  * repairCycle/photos/reporterLineUserId/createdAt/updatedAt are set.
- * category, suggestedPriority, priority, teamId, deadlineAt, completedAt,
+ * category, priority, teamId, deadlineAt, completedAt,
  * mergedIntoTicketId are all absent until a later step (triage, status
  * change, merge) sets them.
  */
@@ -61,7 +61,6 @@ export interface TicketRecord {
   reporterLineUserId: string;
 
   category?: string;
-  suggestedPriority?: Priority;
   priority?: Priority;
   teamId?: string;
   /**

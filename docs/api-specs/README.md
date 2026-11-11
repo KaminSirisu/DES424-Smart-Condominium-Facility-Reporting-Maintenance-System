@@ -21,7 +21,7 @@ There is **no public `/messages` endpoint in this draft**. The stated requiremen
 | `GET /tickets/{ticketId}`                         | Associated reporter or authorized staff | Current ticket detail and caller-visible photo metadata, including canonical target when merged.            |
 | `GET /tickets/{ticketId}/photos/{photoId}/access` | Associated reporter or authorized staff | Issue a short-lived read URL after checking access to that specific photo.                                  |
 | `GET /tickets/{ticketId}/events`                  | Staff                                   | Audit history for status, priority, merge, and reopen actions.                                              |
-| `PATCH /tickets/{ticketId}/priority`              | Assigned-team technician or manager     | Change the suggested or current priority with a reason and audit event.                                     |
+| `PATCH /tickets/{ticketId}/priority`              | Assigned-team technician or manager     | Confirm or change the priority; a change needs a reason; both write an audit event.                         |
 | `PATCH /tickets/{ticketId}/assignment`            | Manager                                 | Reassign unstarted work to another team with a reason.                                                      |
 | `PATCH /tickets/{ticketId}/status`                | Assigned-team technician                | Move work to `IN_PROGRESS` or `DONE`; `DONE` requires uploaded proof.                                       |
 | `POST /tickets/{ticketId}/reopen`                 | Associated reporter                     | Reopen a `DONE` ticket, record why, and notify staff.                                                       |

@@ -83,14 +83,12 @@ export async function applyClassification(
     );
   }
 
-  const suggestedPriority = priorityFor(impact, urgency);
-  const priority: Priority = hazard ? 'CRITICAL' : suggestedPriority;
+  const priority: Priority = hazard ? 'CRITICAL' : priorityFor(impact, urgency);
   const teamId = TEAM_FOR_CATEGORY[category];
 
   try {
     await applyTriage(ticketId, ticket.version, {
       category,
-      suggestedPriority,
       priority,
       teamId,
       deadlineAt: computeDeadline(ticket.createdAt, teamId, priority),
