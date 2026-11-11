@@ -78,6 +78,12 @@ export class ScfrmsDevStack extends Stack {
       projectionType: ddb.ProjectionType.ALL,
     });
     tickets.addGlobalSecondaryIndex({
+      indexName: 'TeamDoneIndex',
+      partitionKey: { name: 'teamDoneKey', type: ddb.AttributeType.STRING },
+      sortKey: { name: 'completedKey', type: ddb.AttributeType.STRING },
+      projectionType: ddb.ProjectionType.ALL,
+    });
+    tickets.addGlobalSecondaryIndex({
       indexName: 'CreatedMonthIndex',
       partitionKey: { name: 'createdMonth', type: ddb.AttributeType.STRING },
       sortKey: { name: 'createdKey', type: ddb.AttributeType.STRING },
@@ -177,6 +183,8 @@ export class ScfrmsDevStack extends Stack {
       name: string,
       entry: string,
       environment: Record<string, string>,
+      timeout: Duration = Duration.seconds(20),
+      options: { memorySize?: number; nodeModules?: string[] } = {},
     ): nodejs.NodejsFunction => {
       const functionName = `${prefix}-${name.toLowerCase()}`;
       return new nodejs.NodejsFunction(this, name, {
@@ -185,8 +193,8 @@ export class ScfrmsDevStack extends Stack {
         handler: 'handler',
         depsLockFilePath: path.join(root, 'package-lock.json'),
         runtime: lambda.Runtime.NODEJS_22_X,
-        memorySize: 256,
-        timeout: Duration.seconds(20),
+        memorySize: options.memorySize ?? 256,
+        timeout,
         logGroup: new logs.LogGroup(this, `${name}Logs`, {
           logGroupName: `/aws/lambda/${functionName}`,
           retention: logs.RetentionDays.ONE_WEEK,
@@ -197,6 +205,7 @@ export class ScfrmsDevStack extends Stack {
           sourceMap: true,
           sourcesContent: false,
           bundleAwsSDK: true,
+          nodeModules: options.nodeModules,
         },
         environment,
       });
@@ -213,6 +222,7 @@ export class ScfrmsDevStack extends Stack {
         allowMethods: [
           apigwv2.CorsHttpMethod.GET,
           apigwv2.CorsHttpMethod.POST,
+          apigwv2.CorsHttpMethod.PATCH,
           apigwv2.CorsHttpMethod.OPTIONS,
         ],
         allowHeaders: ['authorization', 'content-type', 'idempotency-key'],
@@ -234,7 +244,66 @@ export class ScfrmsDevStack extends Stack {
     });
 
     const lineChannelId = stringContext(this, 'lineLoginChannelId');
+    const staffWrites = enabled(this, 'enableStaffTicketWrites');
+    const photoAccessEnabled = enabled(this, 'enablePhotoAccess');
+    if (staffWrites && !enabled(this, 'enableStaffAuth')) {
+      throw new Error(
+        'enableStaffTicketWrites=true requires enableStaffAuth=true.',
+      );
+    }
+    if (staffWrites && !lineChannelId) {
+      throw new Error(
+        'enableStaffTicketWrites=true requires -c lineLoginChannelId=<channel ID>.',
+      );
+    }
+    if (photoAccessEnabled && !enabled(this, 'enableStaffAuth')) {
+      throw new Error('enablePhotoAccess=true requires enableStaffAuth=true.');
+    }
+    if (photoAccessEnabled && !lineChannelId) {
+      throw new Error(
+        'enablePhotoAccess=true requires -c lineLoginChannelId=<channel ID>.',
+      );
+    }
+    const staffJwt = enabled(this, 'enableStaffAuth')
+      ? new secrets.Secret(this, 'StaffJwtSecret', {
+          secretName: `${prefix}/staff-jwt-signing-key`,
+          generateSecretString: {
+            passwordLength: 64,
+            excludePunctuation: true,
+          },
+        })
+      : undefined;
     if (lineChannelId) {
+      const upload = fn(
+        'CreateUpload',
+        staffWrites
+          ? 'handlers/create-upload-entry.ts'
+          : 'uploads/reporter-upload.ts',
+        {
+          ...tableEnv,
+          LINE_LOGIN_CHANNEL_ID: lineChannelId,
+          ...(staffWrites ? { STAFF_JWT_SECRET_ARN: staffJwt!.secretArn } : {}),
+        },
+      );
+      uploads.grantPut(upload, 'uploads/*');
+      if (staffWrites) {
+        staffJwt!.grantRead(upload);
+        upload.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:GetItem'],
+            resources: [accounts.tableArn],
+          }),
+        );
+      }
+      api.addRoutes({
+        path: '/v1/uploads',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: new HttpLambdaIntegration(
+          'CreateUploadIntegration',
+          upload,
+        ),
+      });
+
       const create = fn('CreateTicket', 'tickets/create-ticket.ts', {
         ...tableEnv,
         LINE_LOGIN_CHANNEL_ID: lineChannelId,
@@ -252,16 +321,231 @@ export class ScfrmsDevStack extends Stack {
       });
     }
 
+    if (enabled(this, 'enableStaffTicketReads')) {
+      if (!enabled(this, 'enableStaffAuth')) {
+        throw new Error(
+          'enableStaffTicketReads=true requires enableStaffAuth=true.',
+        );
+      }
+      if (!lineChannelId) {
+        throw new Error(
+          'enableStaffTicketReads=true requires -c lineLoginChannelId=<channel ID>.',
+        );
+      }
+    }
+
+    if (staffJwt) {
+      const staffEnv = {
+        ...tableEnv,
+        STAFF_JWT_SECRET_ARN: staffJwt.secretArn,
+      };
+
+      const login = fn('StaffLogin', 'handlers/staff-login-entry.ts', staffEnv);
+      staffJwt.grantRead(login);
+      accounts.grantReadWriteData(login);
+      teams.grantReadData(login);
+      api.addRoutes({
+        path: '/v1/auth/staff/login',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: new HttpLambdaIntegration('StaffLoginIntegration', login),
+      });
+
+      const me = fn('StaffMe', 'handlers/staff-me-entry.ts', staffEnv);
+      staffJwt.grantRead(me);
+      accounts.grantReadData(me);
+      teams.grantReadData(me);
+      api.addRoutes({
+        path: '/v1/auth/staff/me',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: new HttpLambdaIntegration('StaffMeIntegration', me),
+      });
+
+      if (enabled(this, 'enableStaffTicketReads')) {
+        const readEnv = {
+          ...staffEnv,
+          LINE_LOGIN_CHANNEL_ID: lineChannelId as string,
+        };
+        const list = fn(
+          'ListTickets',
+          'handlers/list-tickets-entry.ts',
+          readEnv,
+        );
+        const get = fn('GetTicket', 'handlers/get-ticket-entry.ts', readEnv);
+        for (const read of [list, get]) {
+          staffJwt.grantRead(read);
+          read.addToRolePolicy(
+            new iam.PolicyStatement({
+              actions: ['dynamodb:GetItem'],
+              resources: [accounts.tableArn],
+            }),
+          );
+        }
+        list.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:BatchGetItem'],
+            resources: [tickets.tableArn],
+          }),
+        );
+        list.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:Query'],
+            resources: [
+              `${tickets.tableArn}/index/TeamOpenIndex`,
+              `${tickets.tableArn}/index/TeamDoneIndex`,
+              `${reporters.tableArn}/index/ReporterTicketsIndex`,
+              photos.tableArn,
+            ],
+          }),
+        );
+        get.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:GetItem'],
+            resources: [tickets.tableArn, reporters.tableArn],
+          }),
+        );
+        get.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:Query'],
+            resources: [photos.tableArn],
+          }),
+        );
+        api.addRoutes({
+          path: '/v1/tickets',
+          methods: [apigwv2.HttpMethod.GET],
+          integration: new HttpLambdaIntegration(
+            'ListTicketsIntegration',
+            list,
+          ),
+        });
+        api.addRoutes({
+          path: '/v1/tickets/{ticketId}',
+          methods: [apigwv2.HttpMethod.GET],
+          integration: new HttpLambdaIntegration('GetTicketIntegration', get),
+        });
+      }
+
+      if (photoAccessEnabled) {
+        const photoAccess = fn(
+          'GetPhotoAccess',
+          'handlers/get-photo-access-entry.ts',
+          { ...staffEnv, LINE_LOGIN_CHANNEL_ID: lineChannelId as string },
+          Duration.seconds(30),
+          { memorySize: 512, nodeModules: ['sharp'] },
+        );
+        staffJwt.grantRead(photoAccess);
+        photoAccess.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:GetItem'],
+            resources: [
+              accounts.tableArn,
+              tickets.tableArn,
+              reporters.tableArn,
+            ],
+          }),
+        );
+        photoAccess.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:Query'],
+            resources: [photos.tableArn],
+          }),
+        );
+        photoAccess.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['s3:GetObject'],
+            resources: [
+              `${uploads.bucketArn}/uploads/*`,
+              `${uploads.bucketArn}/thumbnails/*`,
+            ],
+          }),
+        );
+        photoAccess.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['s3:PutObject'],
+            resources: [`${uploads.bucketArn}/thumbnails/*`],
+          }),
+        );
+        photoAccess.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['s3:ListBucket'],
+            resources: [uploads.bucketArn],
+            conditions: {
+              StringLike: { 's3:prefix': ['uploads/*', 'thumbnails/*'] },
+            },
+          }),
+        );
+        api.addRoutes({
+          path: '/v1/tickets/{ticketId}/photos/{photoId}/access',
+          methods: [apigwv2.HttpMethod.GET],
+          integration: new HttpLambdaIntegration(
+            'GetPhotoAccessIntegration',
+            photoAccess,
+          ),
+        });
+      }
+
+      if (staffWrites) {
+        const setStatus = fn(
+          'SetTicketStatus',
+          'handlers/set-status-entry.ts',
+          staffEnv,
+        );
+        staffJwt.grantRead(setStatus);
+        setStatus.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:GetItem'],
+            resources: [accounts.tableArn, tickets.tableArn],
+          }),
+        );
+        setStatus.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:Query', 'dynamodb:PutItem'],
+            resources: [photos.tableArn],
+          }),
+        );
+        setStatus.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:UpdateItem'],
+            resources: [tickets.tableArn],
+          }),
+        );
+        setStatus.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['dynamodb:PutItem'],
+            resources: [events.tableArn],
+          }),
+        );
+        setStatus.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['s3:GetObject'],
+            resources: [`${uploads.bucketArn}/uploads/REPAIR_PROOF/*`],
+          }),
+        );
+        api.addRoutes({
+          path: '/v1/tickets/{ticketId}/status',
+          methods: [apigwv2.HttpMethod.PATCH],
+          integration: new HttpLambdaIntegration(
+            'SetTicketStatusIntegration',
+            setStatus,
+          ),
+        });
+      }
+    }
+
     if (enabled(this, 'enableTriage')) {
       const modelId = stringContext(this, 'bedrockModelId');
       if (!modelId)
         throw new Error(
           'enableTriage=true requires -c bedrockModelId=<model ID>.',
         );
-      const triage = fn('Triage', 'triage/triage-handler.ts', {
-        ...tableEnv,
-        BEDROCK_MODEL_ID: modelId,
-      });
+      const triage = fn(
+        'Triage',
+        'triage/triage-handler.ts',
+        {
+          ...tableEnv,
+          BEDROCK_MODEL_ID: modelId,
+        },
+        Duration.seconds(60),
+      );
       triage.addEventSource(
         new sources.DynamoEventSource(tickets, {
           startingPosition: lambda.StartingPosition.LATEST,
@@ -294,13 +578,19 @@ export class ScfrmsDevStack extends Stack {
         throw new Error(
           'enableNotifications=true requires -c sesSenderEmail=<verified address>.',
         );
-      const notify = fn('Notify', 'notifications/notification-handler.ts', {
-        ...tableEnv,
-        SES_SENDER_EMAIL: sender,
-        LINE_CHANNEL_ACCESS_TOKEN_SECRET_ARN: lineToken.secretArn,
-        LIFF_URL: stringContext(this, 'liffUrl') ?? '',
-        ADMIN_DASHBOARD_URL: stringContext(this, 'adminOrigin') ?? '',
-      });
+      const notify = fn(
+        'Notify',
+        'notifications/notification-handler.ts',
+        {
+          ...tableEnv,
+          SES_SENDER_EMAIL: sender,
+          LINE_CHANNEL_ACCESS_TOKEN_SECRET_ARN: lineToken.secretArn,
+          LIFF_URL: stringContext(this, 'liffUrl') ?? '',
+          ADMIN_DASHBOARD_URL: stringContext(this, 'adminOrigin') ?? '',
+        },
+        Duration.seconds(30),
+        { memorySize: 512, nodeModules: ['sharp'] },
+      );
       notify.addEventSource(
         new sources.DynamoEventSource(events, {
           startingPosition: lambda.StartingPosition.LATEST,
@@ -319,6 +609,30 @@ export class ScfrmsDevStack extends Stack {
       for (const t of [tickets, photos, reporters, teams])
         t.grantReadData(notify);
       notifications.grantReadWriteData(notify);
+      notify.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:GetObject'],
+          resources: [
+            `${uploads.bucketArn}/uploads/*`,
+            `${uploads.bucketArn}/thumbnails/*`,
+          ],
+        }),
+      );
+      notify.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:PutObject'],
+          resources: [`${uploads.bucketArn}/thumbnails/*`],
+        }),
+      );
+      notify.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:ListBucket'],
+          resources: [uploads.bucketArn],
+          conditions: {
+            StringLike: { 's3:prefix': ['uploads/*', 'thumbnails/*'] },
+          },
+        }),
+      );
       lineToken.grantRead(notify);
       notify.addToRolePolicy(
         new iam.PolicyStatement({

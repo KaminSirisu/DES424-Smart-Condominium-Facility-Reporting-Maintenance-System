@@ -10,8 +10,8 @@ vi.mock('@aws-sdk/client-s3', () => ({
   S3Client: vi.fn(function S3Client() {
     return { send };
   }),
-  HeadObjectCommand: vi.fn(function HeadObjectCommand(input: unknown) {
-    return { name: 'Head', input };
+  ListObjectsV2Command: vi.fn(function ListObjectsV2Command(input: unknown) {
+    return { name: 'List', input };
   }),
   GetObjectCommand: vi.fn(function GetObjectCommand(input: unknown) {
     return { name: 'Get', input };
@@ -87,6 +87,13 @@ const notFound = () =>
 function fakeS3(objects: Map<string, Buffer>) {
   send.mockImplementation(
     async (command: { name: string; input: Record<string, unknown> }) => {
+      if (command.name === 'List') {
+        const prefix = command.input.Prefix as string;
+        const key = [...objects.keys()].find((value) =>
+          value.startsWith(prefix),
+        );
+        return { Contents: key ? [{ Key: key }] : [] };
+      }
       const key = command.input.Key as string;
       if (command.name === 'Put') {
         objects.set(key, command.input.Body as Buffer);
@@ -94,7 +101,6 @@ function fakeS3(objects: Map<string, Buffer>) {
       }
       const object = objects.get(key);
       if (!object) throw notFound();
-      if (command.name === 'Head') return {};
       return {
         ContentLength: object.length,
         Body: { transformToByteArray: async () => new Uint8Array(object) },
@@ -239,6 +245,11 @@ describe('proofPhotoUrl', () => {
     const url = await proofPhotoUrl(ticket, 'proof_1');
 
     expect(url).toBe('https://signed.example/photo?sig=1');
+    expect(commands('List')[0].input).toMatchObject({
+      Bucket: 'uploads-bucket',
+      Prefix: THUMBNAIL_KEY,
+      MaxKeys: 1,
+    });
     expect(commands('Put')).toHaveLength(1);
     expect(commands('Put')[0].input).toMatchObject({
       Bucket: 'uploads-bucket',
@@ -302,17 +313,26 @@ describe('proofPhotoUrl', () => {
   });
 
   it('does not read an original that is far too large', async () => {
-    send.mockImplementation(async (command: { name: string }) => {
-      if (command.name === 'Head') throw notFound();
-      return {
-        ContentLength: 26 * 1024 * 1024,
-        Body: {
-          transformToByteArray: async () => {
-            throw new Error('should not be read');
+    send.mockImplementation(
+      async (command: { name: string; input: { Prefix?: string } }) => {
+        if (command.name === 'List') {
+          return {
+            Contents:
+              command.input.Prefix === THUMBNAIL_KEY
+                ? []
+                : [{ Key: ORIGINAL_KEY }],
+          };
+        }
+        return {
+          ContentLength: 26 * 1024 * 1024,
+          Body: {
+            transformToByteArray: async () => {
+              throw new Error('should not be read');
+            },
           },
-        },
-      };
-    });
+        };
+      },
+    );
 
     await expect(proofPhotoUrl(ticket, 'proof_1')).resolves.toBeNull();
   });

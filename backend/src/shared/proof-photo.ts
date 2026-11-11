@@ -1,6 +1,6 @@
 import {
   GetObjectCommand,
-  HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -118,16 +118,20 @@ function isMissing(err: unknown): boolean {
 }
 
 async function objectExists(key: string): Promise<boolean> {
-  try {
-    await s3.send(new HeadObjectCommand({ Bucket: bucketName(), Key: key }));
-    return true;
-  } catch (err) {
-    if (isMissing(err)) return false;
-    throw err;
-  }
+  // A missing HeadObject can return 403 without broad ListBucket access.
+  // Listing this exact key works with the photo Lambda's scoped prefix grant.
+  const result = await s3.send(
+    new ListObjectsV2Command({
+      Bucket: bucketName(),
+      Prefix: key,
+      MaxKeys: 1,
+    }),
+  );
+  return result.Contents?.some((object) => object.Key === key) ?? false;
 }
 
 async function readOriginal(key: string): Promise<Uint8Array | null> {
+  if (!(await objectExists(key))) return null;
   try {
     const result = await s3.send(
       new GetObjectCommand({ Bucket: bucketName(), Key: key }),

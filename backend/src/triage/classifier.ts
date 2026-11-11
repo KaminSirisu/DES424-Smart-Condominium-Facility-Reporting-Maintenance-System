@@ -88,7 +88,9 @@ export const awsClients: AiClients = {
         modelId,
         system: [{ text: system }],
         messages: [{ role: 'user', content: [{ text: prompt }] }],
-        inferenceConfig: { maxTokens: MAX_OUTPUT_TOKENS, temperature: 0 },
+        // Sonnet 5 rejects the deprecated temperature parameter. The reply
+        // is parsed and validated before any classification reaches DynamoDB.
+        inferenceConfig: { maxTokens: MAX_OUTPUT_TOKENS },
       }),
     );
     return (result.output?.message?.content ?? [])
