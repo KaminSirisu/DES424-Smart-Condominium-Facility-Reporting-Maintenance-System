@@ -495,9 +495,14 @@ paths:
       tags: [Dashboard]
       summary: Read current manager dashboard counts
       description: >-
-        Managers monitor current tickets and team workloads. Team count and
-        priority-based SLA durations are not fixed in this draft; overdueCount
-        becomes meaningful only after the SLA policy is approved.
+        Manager only; a technician gets 403. The counts are made from the
+        tickets created in the last 24 months (a setting of the deployment), so
+        they are exact for that period and the period is the limit of the
+        report. openCount is RECEIVED, ASSIGNED and IN_PROGRESS tickets;
+        overdueCount is ASSIGNED and IN_PROGRESS tickets whose deadlineAt has
+        passed; countsByStatus has every status, with 0 for an empty one;
+        teamWorkloads lists every maintenance team with the ASSIGNED and
+        IN_PROGRESS tickets it has, 0 for an idle team.
       operationId: getDashboardSummary
       security:
         - staffToken: []
@@ -517,10 +522,14 @@ paths:
       description: >-
         Manager view across all current and previous ticket records, including
         RECEIVED, ASSIGNED, IN_PROGRESS, DONE, reopened, and MERGED tickets.
-        Optional dates filter by ticket creation time. Summary counts cover all
-        matching records, while items are paginated. Detailed status changes,
-        earlier repair cycles, and proof photos are available through each
-        ticket's events and photo-access endpoints.
+        Manager only; a technician gets 403. Optional dates filter by ticket
+        creation time (UTC dates, both inclusive). Summary counts cover all
+        matching records, while items are paginated, newest first. The report
+        reads the tickets created in the last 24 months (a setting of the
+        deployment): without from it starts there, and a from older than that
+        is 400. Detailed status changes, earlier repair cycles, and proof
+        photos are available through each ticket's events and photo-access
+        endpoints.
       operationId: getDashboardHistory
       security:
         - staffToken: []
@@ -908,7 +917,7 @@ components:
         overdueCount:
           type: integer
           minimum: 0
-          description: Omitted until SLA durations and countdown rules are approved.
+          description: ASSIGNED and IN_PROGRESS tickets whose deadlineAt has passed.
         countsByStatus:
           type: object
           additionalProperties: { type: integer, minimum: 0 }
@@ -977,7 +986,8 @@ components:
           type: array
           description: >-
             Groups exact reporter-entered location strings; spelling variants
-            remain separate.
+            remain separate. Lists the 100 most reported locations, most
+            reported first.
           items:
             type: object
             required: [location, reportedCount, completedCount]
