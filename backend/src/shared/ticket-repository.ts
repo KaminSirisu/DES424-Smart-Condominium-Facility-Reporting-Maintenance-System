@@ -652,9 +652,14 @@ export interface TicketFilter {
   statuses?: TicketStatus[];
   /** Keep only tickets with exactly this location text. */
   location?: string;
+  /** Leave this ticket out, such as the ticket whose duplicates are asked for. */
+  excludeId?: string;
 }
 
 function matches(ticket: TicketRecord, filter: TicketFilter): boolean {
+  if (filter.excludeId !== undefined && ticket.id === filter.excludeId) {
+    return false;
+  }
   if (filter.statuses && !filter.statuses.includes(ticket.status)) return false;
   if (filter.location !== undefined && ticket.location !== filter.location) {
     return false;

@@ -6,7 +6,6 @@ import {
   listCompletedTickets,
   listReporterTickets,
   listTeamTickets,
-  type OpenPosition,
   type OpenStatus,
   type TicketFilter,
   type TicketListPage,
@@ -17,7 +16,8 @@ import {
   badRequest,
   decodeCursor,
   encodeCursor,
-  isKeyString,
+  OPEN_STATUSES,
+  openCursor,
   parseLimit,
   scalarParam,
   stringCursor,
@@ -56,7 +56,6 @@ const STATUSES: TicketStatus[] = [
   'DONE',
   'MERGED',
 ];
-const OPEN_STATUSES: OpenStatus[] = ['ASSIGNED', 'IN_PROGRESS'];
 const SCALAR_PARAMS = [
   'cursor',
   'limit',
@@ -123,22 +122,6 @@ function parseQuery(event: APIGatewayProxyEventV2): Query {
     completedFrom: scalar('completedFrom'),
     completedTo: scalar('completedTo'),
   };
-}
-
-function openCursor(cursor: unknown): OpenPosition {
-  if (cursor === undefined) return {};
-  const value = (cursor as Record<string, unknown> | null)?.o;
-  if (typeof value !== 'object' || value === null) {
-    throw badRequest('cursor is not valid.');
-  }
-  const position: OpenPosition = {};
-  for (const status of OPEN_STATUSES) {
-    const key = (value as Record<string, unknown>)[status];
-    if (key === undefined) continue;
-    if (!isKeyString(key)) throw badRequest('cursor is not valid.');
-    position[status] = key;
-  }
-  return position;
 }
 
 /** The page for a reporter. */

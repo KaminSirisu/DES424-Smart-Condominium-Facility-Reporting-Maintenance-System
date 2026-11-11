@@ -416,6 +416,22 @@ describe('listTeamTickets', () => {
     expect(ids(result.tickets)).toEqual(['tkt_1', 'tkt_3']);
   });
 
+  it('leaves out the excluded ticket and still fills the page from the others', async () => {
+    addOpen(1, 'ASSIGNED');
+    addOpen(2, 'ASSIGNED');
+    addOpen(3, 'IN_PROGRESS');
+    addOpen(4, 'ASSIGNED');
+
+    const result = await listTeamTickets(
+      'PLUMBING',
+      ['ASSIGNED', 'IN_PROGRESS'],
+      { limit: 2, after: {}, filter: { excludeId: 'tkt_1' } },
+    );
+
+    expect(ids(result.tickets)).toEqual(['tkt_2', 'tkt_3']);
+    expect(result.next).toBeDefined();
+  });
+
   it('resumes after the positions of a cursor', async () => {
     addOpen(1, 'ASSIGNED');
     addOpen(2, 'ASSIGNED');

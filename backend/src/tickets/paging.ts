@@ -1,3 +1,4 @@
+import type { OpenPosition, OpenStatus } from '../shared/ticket-repository.js';
 import { ApiError } from './types.js';
 
 /**
@@ -48,6 +49,26 @@ export function stringCursor(
   const value = (cursor as Record<string, unknown> | null)?.[field];
   if (!isKeyString(value)) throw badRequest('cursor is not valid.');
   return value;
+}
+
+/** The statuses of a team's open queue (TeamOpenIndex). */
+export const OPEN_STATUSES: OpenStatus[] = ['ASSIGNED', 'IN_PROGRESS'];
+
+/** The position in a team's open queue that a cursor holds, per open status. */
+export function openCursor(cursor: unknown): OpenPosition {
+  if (cursor === undefined) return {};
+  const value = (cursor as Record<string, unknown> | null)?.o;
+  if (typeof value !== 'object' || value === null) {
+    throw badRequest('cursor is not valid.');
+  }
+  const position: OpenPosition = {};
+  for (const status of OPEN_STATUSES) {
+    const key = (value as Record<string, unknown>)[status];
+    if (key === undefined) continue;
+    if (!isKeyString(key)) throw badRequest('cursor is not valid.');
+    position[status] = key;
+  }
+  return position;
 }
 
 /** A query parameter that may be given once, or a 400. */
