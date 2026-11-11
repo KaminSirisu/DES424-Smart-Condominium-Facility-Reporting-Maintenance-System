@@ -87,6 +87,8 @@ describe('requireStaffAccount and requireStaff', () => {
       username: 'manager@example.com',
       role: 'MANAGER',
       teamId: undefined,
+      mfaSecret: 'v1.a.b.c',
+      mfaEnrolledAt: '2026-11-02T00:00:00.000Z',
     });
 
     const identity = await requireStaff(
@@ -104,6 +106,58 @@ describe('requireStaffAccount and requireStaff', () => {
       tokenVersion: 3,
     });
     expect(identity).not.toHaveProperty('teamId');
+  });
+
+  describe('manager MFA', () => {
+    const managerAccount: AccountRecord = {
+      ...technicianAccount,
+      accountId: 'manager@example.com',
+      username: 'manager@example.com',
+      role: 'MANAGER',
+      teamId: undefined,
+    };
+    const managerToken = () =>
+      bearer({
+        accountId: 'manager@example.com',
+        role: 'MANAGER',
+        tokenVersion: 3,
+      });
+
+    it('refuses a manager who has not set up MFA, even with a valid token', async () => {
+      getAccount.mockResolvedValue(managerAccount);
+      expect(await statusOf(requireStaff(managerToken(), NOW))).toBe(401);
+      // A secret that is only pending does not count.
+      getAccount.mockResolvedValue({
+        ...managerAccount,
+        mfaPendingSecret: 'v1.a.b.c',
+      });
+      expect(await statusOf(requireStaff(managerToken(), NOW))).toBe(401);
+    });
+
+    it('lets a manager with MFA in', async () => {
+      getAccount.mockResolvedValue({
+        ...managerAccount,
+        mfaSecret: 'v1.a.b.c',
+        mfaEnrolledAt: '2026-11-02T00:00:00.000Z',
+      });
+      expect(await statusOf(requireStaff(managerToken(), NOW))).toBe(
+        'resolved',
+      );
+    });
+
+    it('lets a manager without MFA in only while MFA is switched off', async () => {
+      vi.stubEnv('MANAGER_MFA_REQUIRED', 'false');
+      getAccount.mockResolvedValue(managerAccount);
+      expect(await statusOf(requireStaff(managerToken(), NOW))).toBe(
+        'resolved',
+      );
+    });
+
+    it('never asks a technician for MFA', async () => {
+      expect(await statusOf(requireStaff(bearer(technicianToken), NOW))).toBe(
+        'resolved',
+      );
+    });
   });
 
   it.each([

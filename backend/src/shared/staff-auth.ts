@@ -1,4 +1,5 @@
 import { getAccountByUsername, type AccountRecord } from './accounts.js';
+import { managerMfaRequired } from './mfa-policy.js';
 import { staffFromAuthorization, type StaffIdentity } from './staff-token.js';
 import { ApiError } from '../tickets/types.js';
 
@@ -11,7 +12,9 @@ import { ApiError } from '../tickets/types.js';
  *
  * The token's `account_id` is looked up as the Accounts key, so for now an
  * account's `accountId` is its normalized username. Anything that does not
- * match is the same `401` as a bad token, without saying why.
+ * match is the same `401` as a bad token, without saying why. While manager
+ * MFA is required (shared/mfa-policy.ts), a manager account that has not set
+ * up MFA is refused here too.
  */
 
 function unauthorized(): ApiError {
@@ -32,7 +35,11 @@ export async function requireStaffAccount(
     !account.isActive ||
     account.tokenVersion !== claims.tokenVersion ||
     account.role !== claims.role ||
-    account.teamId !== claims.teamId
+    account.teamId !== claims.teamId ||
+    // A manager without MFA is not let in, even with a token from before MFA.
+    (account.role === 'MANAGER' &&
+      managerMfaRequired() &&
+      account.mfaSecret === undefined)
   ) {
     throw unauthorized();
   }

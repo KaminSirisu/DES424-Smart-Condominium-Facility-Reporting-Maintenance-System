@@ -20,6 +20,7 @@ import {
   recordFailedLogin,
   recordSuccessfulLogin,
 } from '../../backend/src/shared/accounts';
+import { verifyMfaChallenge } from '../../backend/src/shared/mfa-challenge';
 import { verifyStaffToken } from '../../backend/src/shared/staff-token';
 import { getTeamName } from '../../backend/src/shared/teams';
 
@@ -122,7 +123,8 @@ describe('POST /auth/staff/login', () => {
       expect(bodyOf(result).staff).not.toHaveProperty('teamName');
     });
 
-    it('returns a manager without a team', async () => {
+    it('returns a manager without a team while MFA is switched off', async () => {
+      vi.stubEnv('MANAGER_MFA_REQUIRED', 'false');
       getAccount.mockResolvedValue(manager);
 
       const body = bodyOf(await login('manager@example.com'));
@@ -166,6 +168,76 @@ describe('POST /auth/staff/login', () => {
       const result = await handler(event(undefined, raw, true));
 
       expect(result.statusCode).toBe(200);
+    });
+  });
+
+  describe('a manager login (MFA required)', () => {
+    const enrolled: AccountRecord = {
+      ...manager,
+      mfaSecret: 'v1.a.b.c',
+      mfaEnrolledAt: '2026-11-02T00:00:00.000Z',
+    };
+
+    it('answers a challenge, not a session, and says whether MFA is set up', async () => {
+      getAccount.mockResolvedValue(manager);
+      const first = await login('manager@example.com');
+      const firstBody = bodyOf(first);
+      expect(first.statusCode).toBe(200);
+      expect(firstBody).toEqual({
+        mfaRequired: true,
+        mfaEnrolled: false,
+        challengeToken: expect.any(String),
+        expiresInSeconds: 300,
+      });
+
+      getAccount.mockResolvedValue(enrolled);
+      expect(bodyOf(await login('manager@example.com')).mfaEnrolled).toBe(true);
+    });
+
+    it('gives a challenge for this account and version that is not a staff token', async () => {
+      getAccount.mockResolvedValue({ ...enrolled, tokenVersion: 7 });
+      const body = bodyOf(await login('manager@example.com'));
+
+      expect(verifyMfaChallenge(body.challengeToken)).toEqual({
+        accountId: 'manager@example.com',
+        tokenVersion: 7,
+      });
+      expect(() => verifyStaffToken(body.challengeToken)).toThrow();
+      expect(body).not.toHaveProperty('accessToken');
+      expect(body).not.toHaveProperty('staff');
+    });
+
+    it('does not clear the failure count yet, and is not cached', async () => {
+      getAccount.mockResolvedValue(enrolled);
+      const result = await login('manager@example.com');
+
+      expect(successfulLogin).not.toHaveBeenCalled();
+      expect(failedLogin).not.toHaveBeenCalled();
+      expect(result.headers?.['cache-control']).toBe('no-store');
+    });
+
+    it('still counts a wrong password and refuses a locked or disabled manager', async () => {
+      getAccount.mockResolvedValue(enrolled);
+      expect(
+        (await login('manager@example.com', 'nope-nope-nope')).statusCode,
+      ).toBe(401);
+      expect(failedLogin).toHaveBeenCalledTimes(1);
+
+      getAccount.mockResolvedValue({
+        ...enrolled,
+        lockedUntil: new Date(Date.now() + 60_000).toISOString(),
+      });
+      expect((await login('manager@example.com')).statusCode).toBe(429);
+
+      getAccount.mockResolvedValue({ ...enrolled, isActive: false });
+      expect((await login('manager@example.com')).statusCode).toBe(401);
+    });
+
+    it('does not change a technician login', async () => {
+      const body = bodyOf(await login());
+      expect(body.accessToken).toEqual(expect.any(String));
+      expect(body).not.toHaveProperty('mfaRequired');
+      expect(successfulLogin).toHaveBeenCalled();
     });
   });
 
