@@ -45,7 +45,8 @@ export type AccountEventKind =
   | 'PASSWORD_RESET'
   | 'ACCOUNT_DISABLED'
   | 'ACCOUNT_ENABLED'
-  | 'MFA_RESET';
+  | 'MFA_RESET'
+  | 'MFA_ENROLLED';
 
 export const MAX_DISPLAY_NAME_LENGTH = 100;
 
@@ -180,7 +181,7 @@ interface Change {
 }
 
 /** The audit event Put of a change. */
-function eventPut(
+export function accountEventPut(
   accountId: string,
   kind: AccountEventKind,
   actor: string,
@@ -276,7 +277,7 @@ async function commit(
         },
       },
     },
-    eventPut(target.accountId, kind, actorAccountId, now),
+    accountEventPut(target.accountId, kind, actorAccountId, now),
   ];
   if (!self) items.push(actorCheck(actorAccountId));
 
@@ -342,7 +343,7 @@ export async function createManagedAccount(
               ExpressionAttributeNames: { '#username': 'username' },
             },
           },
-          eventPut(username, 'ACCOUNT_CREATED', actorAccountId, now),
+          accountEventPut(username, 'ACCOUNT_CREATED', actorAccountId, now),
           actorCheck(actorAccountId),
         ],
       }),
