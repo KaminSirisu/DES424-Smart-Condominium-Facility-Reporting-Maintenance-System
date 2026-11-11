@@ -17,6 +17,8 @@ tags:
     description: Manager counts and historical analysis.
   - name: Staff auth
     description: Proposed staff session contract pending security review.
+  - name: Staff accounts
+    description: Account management for managers (RR-13).
 paths:
   /health:
     get:
@@ -584,11 +586,18 @@ paths:
                 password: { type: string, format: password }
       responses:
         '200':
-          description: Short-lived staff token; exact session model is open.
+          description: >-
+            A technician gets the staff session. A manager whose password was
+            right gets an MfaChallenge instead (unless MFA is switched off for
+            local development) and continues at /auth/staff/mfa/verify, or at
+            /auth/staff/mfa/enroll and /auth/staff/mfa/confirm when no
+            authenticator is set up. Tell the two apart by mfaRequired.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StaffSession'
+                oneOf:
+                  - $ref: '#/components/schemas/StaffSession'
+                  - $ref: '#/components/schemas/MfaChallenge'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
@@ -607,6 +616,183 @@ paths:
               schema:
                 $ref: '#/components/schemas/StaffProfile'
         '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/staff/mfa/enroll:
+    post:
+      tags: [Staff auth]
+      summary: Start the authenticator setup of a manager
+      description: >-
+        For a manager whose login answered mfaRequired with mfaEnrolled false.
+        Makes a secret, keeps it pending and shows it once, to be scanned as a
+        QR code of otpauthUri or typed into an authenticator app. The secret
+        stays pending until POST /auth/staff/mfa/confirm gets the first code
+        from it; a new call replaces a pending secret. Whoever enrolls an
+        account first owns its authenticator, so a new manager account should
+        be set up as soon as its password is handed over.
+      operationId: enrollStaffMfa
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [challengeToken]
+              properties:
+                challengeToken: { type: string }
+      responses:
+        '200':
+          description: The secret, shown once. The answer is never cached.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaEnrollment'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/staff/mfa/confirm:
+    post:
+      tags: [Staff auth]
+      summary: Finish the authenticator setup and log in
+      description: >-
+        The first correct code from the pending secret makes it the manager's
+        authenticator and starts the session. Confirming raises the account's
+        token version, so the challenge cannot be used again and sessions from
+        before MFA end. A wrong code counts towards the same lockout as a wrong
+        password (5 in a row lock the account for 15 minutes, 429).
+      operationId: confirmStaffMfa
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaCode'
+      responses:
+        '200':
+          description: Staff session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffSession'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/staff/mfa/verify:
+    post:
+      tags: [Staff auth]
+      summary: Log in with an authenticator code
+      description: >-
+        For a manager whose login answered mfaRequired with mfaEnrolled true.
+        A code is good once: a code that was already used is refused. A wrong
+        code counts towards the same lockout as a wrong password.
+      operationId: verifyStaffMfa
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaCode'
+      responses:
+        '200':
+          description: Staff session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffSession'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /staff-accounts:
+    get:
+      tags: [Staff accounts]
+      summary: List staff accounts
+      description: >-
+        Manager only; a technician gets 403. Every account, managers first and
+        then by email. No password hash or MFA secret is ever returned.
+      operationId: listStaffAccounts
+      security:
+        - staffToken: []
+      responses:
+        '200':
+          description: All staff accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedAccountList'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Staff accounts]
+      summary: Create a technician or manager account
+      description: >-
+        Manager only (SR-07: there is no self sign-up). The system makes the
+        password, stores only its hash and returns it once as
+        temporaryPassword, to be handed over in person. A technician account
+        needs a teamId and each team may have one active technician account; a
+        manager account has no teamId and sets up MFA at its first login.
+      operationId: createStaffAccount
+      security:
+        - staffToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStaffAccount'
+      responses:
+        '201':
+          description: Account created. The answer is never cached.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffAccountWithPassword'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /staff-accounts/{accountId}:
+    patch:
+      tags: [Staff accounts]
+      summary: Reset a password, disable or enable an account, or reset MFA
+      description: >-
+        Manager only. RESET_PASSWORD makes a new password and returns it once
+        as temporaryPassword; it also clears the failed-login count and any
+        lockout. SET_ACTIVE disables or enables the account. RESET_MFA removes
+        a manager's authenticator so the next login sets up a new one. Every
+        action ends all sessions of the account at once. A manager cannot
+        disable their own account or reset their own MFA (409); the only
+        manager who lost the authenticator uses the reset:manager-mfa script.
+        Every change is written to an audit trail.
+      operationId: updateStaffAccount
+      security:
+        - staffToken: []
+      parameters:
+        - $ref: '#/components/parameters/StaffAccountId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStaffAccount'
+      responses:
+        '200':
+          description: >-
+            The account after the change. temporaryPassword is present for
+            RESET_PASSWORD only. The answer is never cached.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffAccountWithPassword'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 components:
   securitySchemes:
     lineToken:
@@ -637,6 +823,12 @@ components:
       required: true
       description: Stable unique key for one intended action and its retries.
       schema: { type: string, minLength: 8, maxLength: 128 }
+    StaffAccountId:
+      in: path
+      name: accountId
+      required: true
+      description: The account's email. It may be sent as it is or percent encoded.
+      schema: { type: string }
   responses:
     BadRequest:
       description: Malformed request.
@@ -659,7 +851,7 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
     Conflict:
-      description: Current ticket state or idempotency key conflicts with this action.
+      description: The current state of the ticket or account, or an idempotency key, conflicts with this action.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1021,3 +1213,114 @@ components:
         teamName:
           type: string
           description: Display name of the team; present for a technician when the team has one.
+    MfaChallenge:
+      type: object
+      description: >-
+        The answer of a manager login whose password was right, while MFA is
+        required. It is not a session: the challenge is good for 5 minutes and
+        is exchanged for a StaffSession at the MFA endpoints.
+      required: [mfaRequired, mfaEnrolled, challengeToken, expiresInSeconds]
+      properties:
+        mfaRequired: { type: boolean, enum: [true] }
+        mfaEnrolled:
+          type: boolean
+          description: >-
+            True when the manager has an authenticator (use verify); false when
+            it has to be set up first (use enroll, then confirm).
+        challengeToken: { type: string }
+        expiresInSeconds: { type: integer, minimum: 1 }
+    MfaEnrollment:
+      type: object
+      required: [secret, otpauthUri]
+      properties:
+        secret:
+          type: string
+          description: Base32 TOTP secret, shown once.
+        otpauthUri:
+          type: string
+          description: otpauth:// link to show as a QR code.
+    MfaCode:
+      type: object
+      additionalProperties: false
+      required: [challengeToken, code]
+      properties:
+        challengeToken: { type: string }
+        code:
+          type: string
+          description: The 6 digits from the authenticator app; one space is allowed.
+          pattern: '^\s*\d{3}\s?\d{3}\s*$'
+    ManagedAccount:
+      type: object
+      required:
+        [
+          accountId,
+          email,
+          role,
+          displayName,
+          isActive,
+          passwordChangedAt,
+          createdAt,
+        ]
+      properties:
+        accountId: { type: string }
+        email: { type: string, format: email }
+        role: { type: string, enum: [TECHNICIAN, MANAGER] }
+        teamId: { type: string, description: 'Present for a TECHNICIAN only.' }
+        displayName: { type: string }
+        isActive: { type: boolean }
+        mfaEnabled:
+          type: boolean
+          description: Present for a MANAGER only; true once an authenticator has been confirmed.
+        lockedUntil:
+          type: string
+          format: date-time
+          description: Present while the account is locked out after failed logins.
+        lastLoginAt: { type: string, format: date-time }
+        passwordChangedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    ManagedAccountList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ManagedAccount' }
+    CreateStaffAccount:
+      type: object
+      additionalProperties: false
+      required: [email, role, displayName]
+      properties:
+        email: { type: string, format: email }
+        role: { type: string, enum: [TECHNICIAN, MANAGER] }
+        teamId:
+          {
+            type: string,
+            description: 'Required for a TECHNICIAN, not allowed for a MANAGER.',
+          }
+        displayName: { type: string, minLength: 1, maxLength: 100 }
+    UpdateStaffAccount:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [action]
+          properties:
+            action: { type: string, enum: [RESET_PASSWORD] }
+        - type: object
+          additionalProperties: false
+          required: [action, isActive]
+          properties:
+            action: { type: string, enum: [SET_ACTIVE] }
+            isActive: { type: boolean }
+        - type: object
+          additionalProperties: false
+          required: [action]
+          properties:
+            action: { type: string, enum: [RESET_MFA] }
+    StaffAccountWithPassword:
+      type: object
+      required: [account]
+      properties:
+        account: { $ref: '#/components/schemas/ManagedAccount' }
+        temporaryPassword:
+          type: string
+          description: Generated password, shown once. Present when an account is created and for RESET_PASSWORD.
