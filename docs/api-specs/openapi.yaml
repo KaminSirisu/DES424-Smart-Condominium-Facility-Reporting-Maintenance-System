@@ -258,6 +258,40 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{ticketId}/duplicates:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    get:
+      tags: [Tickets]
+      summary: Suggest open tickets that may describe the same problem
+      description: >-
+        Staff only. A technician asks about a ticket of their team (another
+        team is 403); a manager may ask about any ticket. The candidates are
+        the open tickets (ASSIGNED or IN_PROGRESS) of the same team with
+        exactly the same location text, not the ticket itself, oldest first.
+        This is only a suggestion: matching location text alone does not
+        establish a duplicate, so a technician confirms before merging, and the
+        merge endpoint applies its own rules. A ticket that is not open
+        (RECEIVED, DONE or MERGED) has no candidates and gets an empty page.
+        nextCursor is present only when there may be more; send it back as it
+        is.
+      operationId: listDuplicateCandidates
+      security:
+        - staffToken: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of candidate tickets.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketPage'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /tickets/{ticketId}/priority:
     parameters:
       - $ref: '#/components/parameters/TicketId'
