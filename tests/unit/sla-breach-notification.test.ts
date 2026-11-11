@@ -57,7 +57,10 @@ describe('activeManagerEmails', () => {
 describe('the supervisors channel', () => {
   it('answers SLA_BREACHED and nothing else', () => {
     expect(emailSupervisorsChannel.name).toBe('EMAIL_SUPERVISORS');
-    expect(emailSupervisorsChannel.kinds).toEqual(['SLA_BREACHED']);
+    expect(emailSupervisorsChannel.kinds).toEqual([
+      'SLA_BREACHED',
+      'SLA_RESPONSE_BREACHED',
+    ]);
   });
 
   it('alerts the active managers read from the Accounts table', async () => {
@@ -100,7 +103,25 @@ describe('the supervisors channel', () => {
         kind: 'SLA_BREACHED',
       }),
     ).resolves.toBe(true);
-    expect(sendSlaBreachEmail).toHaveBeenCalledWith(ticket, 'boss@example.com');
+    expect(sendSlaBreachEmail).toHaveBeenCalledWith(
+      ticket,
+      'boss@example.com',
+      'SLA_BREACHED',
+    );
+  });
+
+  it('tells the email which alert it is for', async () => {
+    vi.mocked(sendSlaBreachEmail).mockResolvedValue(undefined);
+    await emailSupervisorsChannel.send(ticket, 'boss@example.com', {
+      ticketId: 'tkt_1',
+      eventId: 'e2',
+      kind: 'SLA_RESPONSE_BREACHED',
+    });
+    expect(sendSlaBreachEmail).toHaveBeenLastCalledWith(
+      ticket,
+      'boss@example.com',
+      'SLA_RESPONSE_BREACHED',
+    );
   });
 
   it('lets an email failure through so the record is retried', async () => {

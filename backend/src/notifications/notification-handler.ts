@@ -8,6 +8,7 @@ import type { NotificationChannel, NotificationEvent } from './channel.js';
 import { lineReporterChannel } from './line-notification.js';
 import { hasSent, markSent } from './notification-log.js';
 import { emailSupervisorsChannel } from './sla-breach-notification.js';
+import { emailTeamWarningChannel } from './sla-warning-notification.js';
 import { sendWorkOrderEmail } from './work-order-email.js';
 
 /**
@@ -49,6 +50,7 @@ export const CHANNELS: readonly NotificationChannel[] = [
   emailTeamChannel,
   lineReporterChannel,
   emailSupervisorsChannel,
+  emailTeamWarningChannel,
 ];
 
 /**

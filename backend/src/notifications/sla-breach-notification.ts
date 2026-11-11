@@ -5,7 +5,10 @@ import { sendSlaBreachEmail } from './sla-breach-email.js';
 
 /**
  * The SLA breach alert (SCFRMS-42): when the sweep records an SLA_BREACHED
- * event, every active MANAGER account gets an email (the "supervisor" and
+ * event (the resolution deadline passed, with the hourly reminders of a
+ * CRITICAL ticket) or an SLA_RESPONSE_BREACHED event (the response target
+ * passed with the ticket still ASSIGNED), every active MANAGER account gets an
+ * email (the "supervisor" and
  * "Juristic Manager" of requirements 3.7). The addresses are the managers'
  * login emails in the Accounts table, so adding, disabling or removing a
  * manager through the account endpoints changes who is alerted, with no
@@ -28,7 +31,7 @@ export async function activeManagerEmails(
 
 export const emailSupervisorsChannel: NotificationChannel = {
   name: 'EMAIL_SUPERVISORS',
-  kinds: ['SLA_BREACHED'],
+  kinds: ['SLA_BREACHED', 'SLA_RESPONSE_BREACHED'],
   recipients: async (ticket) => {
     const emails = await activeManagerEmails();
     if (emails.length === 0) {
@@ -38,8 +41,14 @@ export const emailSupervisorsChannel: NotificationChannel = {
     }
     return emails;
   },
-  send: async (ticket, recipient) => {
-    await sendSlaBreachEmail(ticket, recipient);
+  send: async (ticket, recipient, event) => {
+    await sendSlaBreachEmail(
+      ticket,
+      recipient,
+      event.kind === 'SLA_RESPONSE_BREACHED'
+        ? 'SLA_RESPONSE_BREACHED'
+        : 'SLA_BREACHED',
+    );
     return true;
   },
 };
