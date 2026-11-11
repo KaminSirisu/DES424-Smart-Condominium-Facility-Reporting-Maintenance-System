@@ -236,6 +236,11 @@ paths:
     get:
       tags: [Tickets]
       summary: Read ticket audit events
+      description: >-
+        Staff only. A technician reads the history of their team's tickets (a
+        ticket of another team, or one with no team yet, is 403); a manager
+        reads any ticket. Events come oldest first. nextCursor is present only
+        when there are more events; send it back as it is.
       operationId: listTicketEvents
       security:
         - staffToken: []
@@ -249,6 +254,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TicketEventPage'
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -799,7 +805,9 @@ components:
           description: >-
             Written so far: CREATED, TRIAGED, STATUS_CHANGED, MERGED (on a
             merged source) and DUPLICATES_MERGED (on the canonical ticket).
-            STATUS_CHANGED and MERGED carry fromStatus and toStatus.
+            STATUS_CHANGED and MERGED carry fromStatus and toStatus. The staff
+            UI also shows PRIORITY_CHANGED and PRIORITY_CONFIRMED, which the
+            priority endpoint will write, and any other kind as it is.
         occurredAt: { type: string, format: date-time }
         actorType: { type: string, enum: [REPORTER, STAFF, SYSTEM] }
         actorStaffId: { type: string }
