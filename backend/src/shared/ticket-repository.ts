@@ -7,6 +7,7 @@ import {
 import { ddb } from './dynamodb-client.js';
 import type { TicketQuotaClaim } from './rate-limit.js';
 import { tableName } from './tables.js';
+import { TEAM_IDS } from '../triage/policy.js';
 import {
   Priority,
   StoredTicketPhoto,
@@ -1097,7 +1098,7 @@ export async function reopenTicket(
     update += ', deadlineAt = :deadlineAt';
     values[':deadlineAt'] = change.deadlineAt;
   }
-  update += ' REMOVE completedAt, teamDoneKey, completedKey';
+  update += ' REMOVE completedAt, teamDoneKey, completedKey, escalationLevel';
 
   await ddb.send(
     new TransactWriteCommand({
@@ -1257,4 +1258,131 @@ export async function listTicketsOfMonths(
     }),
   );
   return perMonth.flat();
+}
+
+/** The SLA escalation level of a resolution breach (E2 in requirements 3.7). */
+export const ESCALATION_RESOLUTION_BREACH = 2;
+
+/**
+ * Open tickets (ASSIGNED, IN_PROGRESS) whose deadline has passed and whose
+ * breach has not been recorded yet, oldest deadline first (SLA-13). One query
+ * per team and status on TeamOpenIndex, which projects every attribute, so
+ * nothing else is read. The index is eventually consistent, which is safe:
+ * markSlaBreached() checks the ticket again before it writes anything.
+ */
+export async function listBreachedTickets(now: Date): Promise<TicketRecord[]> {
+  const nowIso = now.toISOString();
+  const statuses: OpenStatus[] = ['ASSIGNED', 'IN_PROGRESS'];
+  const perPartition = await Promise.all(
+    TEAM_IDS.flatMap((teamId) =>
+      statuses.map(async (status) => {
+        const tickets: TicketRecord[] = [];
+        let startKey: Record<string, unknown> | undefined;
+        do {
+          const page = await ddb.send(
+            new QueryCommand({
+              TableName: tableName('TICKETS'),
+              IndexName: 'TeamOpenIndex',
+              KeyConditionExpression: 'teamStatusKey = :key',
+              FilterExpression:
+                'deadlineAt <= :now AND (attribute_not_exists(escalationLevel) OR escalationLevel < :level)',
+              ExpressionAttributeValues: {
+                ':key': `TEAM#${teamId}#STATUS#${status}`,
+                ':now': nowIso,
+                ':level': ESCALATION_RESOLUTION_BREACH,
+              },
+              ExclusiveStartKey: startKey,
+            }),
+          );
+          for (const item of page.Items ?? []) {
+            tickets.push(toTicketRecord(item as TicketItem, []));
+          }
+          startKey = page.LastEvaluatedKey;
+        } while (startKey);
+        return tickets;
+      }),
+    ),
+  );
+  return perPartition
+    .flat()
+    .sort((a, b) =>
+      (a.deadlineAt ?? '') < (b.deadlineAt ?? '')
+        ? -1
+        : (a.deadlineAt ?? '') > (b.deadlineAt ?? '')
+          ? 1
+          : 0,
+    );
+}
+
+/**
+ * Records that a ticket passed its resolution deadline (SLA-14, SLA-15): the
+ * escalation level on the ticket and an SLA_BREACHED audit event, in one
+ * transaction. The notification worker reads the event from the TicketEvents
+ * stream and sends the alert, so a failed email is retried there and the
+ * breach itself is recorded exactly once.
+ *
+ * The write is conditional on what is true now: the ticket is still open, its
+ * deadline has still passed (a priority or team change may have moved it) and
+ * the level was not raised yet. Returns false when that is no longer so.
+ * The ticket's version is not raised, so a person working on the ticket is
+ * never refused because of this write.
+ */
+export async function markSlaBreached(
+  ticket: TicketRecord,
+  now: Date,
+): Promise<boolean> {
+  const nowIso = now.toISOString();
+  const event: TicketEventRecord = {
+    id: `${ticket.id}_sla_breached_c${ticket.repairCycle}`,
+    ticketId: ticket.id,
+    kind: 'SLA_BREACHED',
+    occurredAt: nowIso,
+    actorType: 'SYSTEM',
+    repairCycle: ticket.repairCycle,
+    note: 'The resolution deadline passed.',
+  };
+
+  try {
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: tableName('TICKETS'),
+              Key: { ticketId: ticket.id },
+              ConditionExpression:
+                '#status IN (:assigned, :inProgress) AND deadlineAt <= :now AND (attribute_not_exists(escalationLevel) OR escalationLevel < :level)',
+              UpdateExpression: 'SET escalationLevel = :level',
+              ExpressionAttributeNames: { '#status': 'status' },
+              ExpressionAttributeValues: {
+                ':assigned': 'ASSIGNED',
+                ':inProgress': 'IN_PROGRESS',
+                ':now': nowIso,
+                ':level': ESCALATION_RESOLUTION_BREACH,
+              },
+            },
+          },
+          {
+            Put: {
+              TableName: tableName('TICKET_EVENTS'),
+              Item: toEventItem(event),
+            },
+          },
+        ],
+      }),
+    );
+    return true;
+  } catch (err) {
+    const e = err as {
+      name?: string;
+      CancellationReasons?: { Code?: string }[];
+    };
+    if (
+      e?.name === 'TransactionCanceledException' &&
+      e.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed'
+    ) {
+      return false;
+    }
+    throw err;
+  }
 }

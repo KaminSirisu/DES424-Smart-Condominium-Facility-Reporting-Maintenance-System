@@ -85,6 +85,12 @@ export interface TicketRecord {
    * request is recognised and changes nothing. Internal.
    */
   reopenKey?: string;
+  /**
+   * The highest SLA escalation level already raised for the current SLA clock
+   * (requirements 3.7): 2 once the resolution deadline has passed and the
+   * breach was recorded. A reopen removes it with the new clock. Internal.
+   */
+  escalationLevel?: number;
   completedAt?: string;
   /**
    * When the repair was last finished: set when the ticket becomes DONE and
