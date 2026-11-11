@@ -571,6 +571,11 @@ paths:
     post:
       tags: [Staff auth]
       summary: Start a staff session (auth approach pending approval)
+      description: >-
+        Wrong credentials, a disabled account and an unknown email all get the
+        same 401. Five failed logins in a row lock the account for 15 minutes,
+        and more than 20 attempts in 15 minutes from one address are refused
+        too; both are 429 with Retry-After.
       operationId: loginStaff
       security: []
       requestBody:
