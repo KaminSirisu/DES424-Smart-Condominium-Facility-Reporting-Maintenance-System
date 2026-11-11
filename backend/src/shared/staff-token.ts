@@ -62,6 +62,17 @@ function sign(signingInput: string): Buffer {
   return createHmac('sha256', secret()).update(signingInput).digest();
 }
 
+/**
+ * A signed HS256 token holding these claims. Staff tokens and the short MFA
+ * challenges (shared/mfa-challenge.ts) are made with this, so both are signed
+ * with the same secret and told apart by their claims.
+ */
+export function signClaims(claims: Record<string, unknown>): string {
+  const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const signingInput = `${header}.${base64url(JSON.stringify(claims))}`;
+  return `${signingInput}.${base64url(sign(signingInput))}`;
+}
+
 /** Issues a token. The login uses this; tests use it to make valid tokens. */
 export function signStaffToken(
   identity: StaffIdentity,
@@ -80,10 +91,7 @@ export function signStaffToken(
     exp: iat + ttlSeconds,
   };
   if (identity.teamId) claims.team_id = identity.teamId;
-
-  const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const signingInput = `${header}.${base64url(JSON.stringify(claims))}`;
-  return `${signingInput}.${base64url(sign(signingInput))}`;
+  return signClaims(claims);
 }
 
 function parseJson(part: string): Record<string, unknown> | null {
@@ -100,6 +108,34 @@ function parseJson(part: string): Record<string, unknown> | null {
 }
 
 /**
+ * The claims of a token whose algorithm and signature are right, or null for
+ * any other token. Whether the claims make sense, and whether the token has
+ * expired, is for the caller to check.
+ */
+export function readSignedClaims(
+  token: string,
+): Record<string, unknown> | null {
+  // A missing or weak secret is a server problem: fail loudly for every
+  // request instead of answering 401 to some of them.
+  secret();
+
+  const parts = token.split('.');
+  if (parts.length !== 3 || parts.some((p) => p === '')) return null;
+  const [headerPart, payloadPart, signaturePart] = parts;
+
+  const header = parseJson(headerPart);
+  // Only HS256: never accept "none" or another algorithm named by the token.
+  if (!header || header.alg !== 'HS256') return null;
+
+  const expected = sign(`${headerPart}.${payloadPart}`);
+  const given = Buffer.from(signaturePart, 'base64url');
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
+    return null;
+  }
+  return parseJson(payloadPart);
+}
+
+/**
  * Checks the signature, the expiry and the claims, and returns who the token
  * belongs to. Throws a 401 for any bad token, without saying why.
  */
@@ -107,25 +143,7 @@ export function verifyStaffToken(
   token: string,
   now: Date = new Date(),
 ): StaffIdentity {
-  // A missing or weak secret is a server problem: fail loudly for every
-  // request instead of answering 401 to some of them.
-  secret();
-
-  const parts = token.split('.');
-  if (parts.length !== 3 || parts.some((p) => p === '')) throw unauthorized();
-  const [headerPart, payloadPart, signaturePart] = parts;
-
-  const header = parseJson(headerPart);
-  // Only HS256: never accept "none" or another algorithm named by the token.
-  if (!header || header.alg !== 'HS256') throw unauthorized();
-
-  const expected = sign(`${headerPart}.${payloadPart}`);
-  const given = Buffer.from(signaturePart, 'base64url');
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
-    throw unauthorized();
-  }
-
-  const claims = parseJson(payloadPart);
+  const claims = readSignedClaims(token);
   if (!claims) throw unauthorized();
 
   const { account_id, role, team_id, token_version, iat, exp } = claims;
