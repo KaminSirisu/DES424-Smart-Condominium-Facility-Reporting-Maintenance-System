@@ -73,6 +73,12 @@ export interface TicketRecord {
   /** Set when the safety override (SLA-02) raised the priority to CRITICAL. */
   safetyHazard?: string;
   deadlineAt?: string;
+  /**
+   * When the SLA clock started, only if that is earlier than `createdAt`: a
+   * merge sets it when a ticket merged into this one was created before it
+   * (SLA-09). Internal; see slaStartOf() in triage/policy.ts.
+   */
+  slaStartAt?: string;
   completedAt?: string;
   mergedIntoTicketId?: string;
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { ApiError, type TicketRecord } from '../../backend/src/tickets/types';
+import { computeDeadline } from '../../backend/src/triage/policy';
 
 vi.mock('../../backend/src/shared/staff-auth', () => ({
   requireStaff: vi.fn(),
@@ -195,11 +196,14 @@ describe('POST /tickets/{ticketId}/merge', () => {
       expect(change.priority).toBe('CRITICAL');
       // 4 hours after the earliest creation time, 07:00.
       expect(change.deadlineAt).toBe('2026-11-05T11:00:00.000Z');
+      // createdAt stays; the earlier start is kept apart for later recounts.
+      expect(change.slaStartAt).toBe('2026-11-05T07:00:00.000Z');
       expect(body(response)).toMatchObject({
         priority: 'CRITICAL',
         deadlineAt: '2026-11-05T11:00:00.000Z',
         createdAt: '2026-11-05T08:00:00.000Z',
       });
+      expect(body(response)).not.toHaveProperty('slaStartAt');
     });
 
     it('moves only the deadline when an older ticket has the same priority', async () => {
@@ -213,6 +217,37 @@ describe('POST /tickets/{ticketId}/merge', () => {
       const change = vi.mocked(mergeTickets).mock.calls[0][2];
       expect(change).not.toHaveProperty('priority');
       expect(change.deadlineAt).toBe('2026-11-06T06:00:00.000Z');
+      expect(change.slaStartAt).toBe('2026-11-05T06:00:00.000Z');
+    });
+
+    it('counts from an earlier SLA start that a source took over in a merge of its own', async () => {
+      tickets.set('tkt_dup1', {
+        ...dup1,
+        slaStartAt: '2026-11-05T05:00:00.000Z',
+      });
+
+      await merge();
+
+      const change = vi.mocked(mergeTickets).mock.calls[0][2];
+      expect(change.slaStartAt).toBe('2026-11-05T05:00:00.000Z');
+      expect(change.deadlineAt).toBe(
+        computeDeadline('2026-11-05T05:00:00.000Z', 'PLUMBING', 'MEDIUM'),
+      );
+    });
+
+    it('keeps the SLA start the canonical ticket already has when it is the earliest', async () => {
+      tickets.set('tkt_main', {
+        ...main,
+        slaStartAt: '2026-11-05T04:00:00.000Z',
+      });
+
+      await merge();
+
+      const change = vi.mocked(mergeTickets).mock.calls[0][2];
+      expect(change).not.toHaveProperty('slaStartAt');
+      expect(change.deadlineAt).toBe(
+        computeDeadline('2026-11-05T04:00:00.000Z', 'PLUMBING', 'MEDIUM'),
+      );
     });
 
     it('never lowers the priority or pushes the deadline later', async () => {
@@ -223,6 +258,7 @@ describe('POST /tickets/{ticketId}/merge', () => {
       const change = vi.mocked(mergeTickets).mock.calls[0][2];
       expect(change).not.toHaveProperty('priority');
       expect(change).not.toHaveProperty('deadlineAt');
+      expect(change).not.toHaveProperty('slaStartAt');
     });
 
     it('accepts an IN_PROGRESS ticket as the canonical ticket', async () => {

@@ -479,6 +479,8 @@ export interface MergeChange {
   /** The canonical ticket's new priority and deadline, only when the merge changes them (SLA-09). */
   priority?: Priority;
   deadlineAt?: string;
+  /** The earlier SLA start the canonical ticket takes from a merged ticket (SLA-09). */
+  slaStartAt?: string;
 }
 
 /** How many items one merge writes: the tickets and their events, plus a reporter link each. */
@@ -552,6 +554,10 @@ export async function mergeTickets(
   if (change.deadlineAt) {
     canonicalUpdate += ', deadlineAt = :deadlineAt';
     canonicalValues[':deadlineAt'] = change.deadlineAt;
+  }
+  if (change.slaStartAt) {
+    canonicalUpdate += ', slaStartAt = :slaStartAt';
+    canonicalValues[':slaStartAt'] = change.slaStartAt;
   }
 
   await ddb.send(
@@ -936,4 +942,91 @@ export async function listTicketEvents(
       ? { next: shown[shown.length - 1].eventKey }
       : {}),
   };
+}
+
+export interface PriorityChange {
+  to: Priority;
+  /** The staff account that decides; recorded as the actor of the event. */
+  accountId: string;
+  /** The team of a technician account (SR-11); a manager has none. */
+  teamId?: string;
+  now: string;
+  /** Why it changed; required by the endpoint when the priority changes. */
+  reason?: string;
+  /** The new deadline, only when it differs from the current one (SLA-07). */
+  deadlineAt?: string;
+}
+
+/**
+ * A person decides the priority of an open ticket, in one transaction with
+ * the audit event: a different value is PRIORITY_CHANGED, the same value
+ * (accepting what the AI chose) is PRIORITY_CONFIRMED. Either way
+ * `prioritySetBy` becomes STAFF, so the AI never overwrites it.
+ *
+ * Only succeeds if the ticket is still ASSIGNED or IN_PROGRESS at the version
+ * that was read. Otherwise it fails with TransactionCanceledException (reason
+ * ConditionalCheckFailed at index 0).
+ */
+export async function setTicketPriority(
+  ticket: TicketRecord,
+  change: PriorityChange,
+): Promise<void> {
+  const event: TicketEventRecord = {
+    id: `${ticket.id}_priority_v${ticket.version + 1}`,
+    ticketId: ticket.id,
+    kind:
+      ticket.priority === change.to ? 'PRIORITY_CONFIRMED' : 'PRIORITY_CHANGED',
+    occurredAt: change.now,
+    actorType: 'STAFF',
+    actorStaffId: change.accountId,
+    ...(change.teamId ? { actorTeamId: change.teamId } : {}),
+    ...(ticket.priority ? { fromPriority: ticket.priority } : {}),
+    toPriority: change.to,
+    repairCycle: ticket.repairCycle,
+    ...(change.reason ? { note: change.reason } : {}),
+  };
+
+  const values: Record<string, unknown> = {
+    ':assigned': 'ASSIGNED',
+    ':inProgress': 'IN_PROGRESS',
+    ':version': ticket.version,
+    ':one': 1,
+    ':now': change.now,
+    ':priority': change.to,
+    ':staff': 'STAFF',
+  };
+  let update =
+    'SET priority = :priority, prioritySetBy = :staff, updatedAt = :now, ' +
+    '#version = #version + :one';
+  if (change.deadlineAt) {
+    update += ', deadlineAt = :deadlineAt';
+    values[':deadlineAt'] = change.deadlineAt;
+  }
+
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: tableName('TICKETS'),
+            Key: { ticketId: ticket.id },
+            ConditionExpression:
+              '#status IN (:assigned, :inProgress) AND #version = :version',
+            UpdateExpression: update,
+            ExpressionAttributeNames: {
+              '#status': 'status',
+              '#version': 'version',
+            },
+            ExpressionAttributeValues: values,
+          },
+        },
+        {
+          Put: {
+            TableName: tableName('TICKET_EVENTS'),
+            Item: toEventItem(event),
+          },
+        },
+      ],
+    }),
+  );
 }

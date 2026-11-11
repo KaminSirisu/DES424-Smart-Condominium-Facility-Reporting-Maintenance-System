@@ -10,6 +10,7 @@ import {
   isTeamId,
   priorityFor,
   resolutionHours,
+  slaStartOf,
 } from '../../backend/src/triage/policy';
 
 describe('triage policy', () => {
@@ -40,6 +41,18 @@ describe('triage policy', () => {
     expect(computeDeadline('2026-10-28T10:00:00.000Z', 'HVAC', 'LOW')).toBe(
       '2026-11-02T10:00:00.000Z',
     );
+  });
+
+  it('starts the SLA clock at creation, or at the earlier start a merge took over', () => {
+    expect(slaStartOf({ createdAt: '2026-10-28T10:00:00.000Z' })).toBe(
+      '2026-10-28T10:00:00.000Z',
+    );
+    expect(
+      slaStartOf({
+        createdAt: '2026-10-28T10:00:00.000Z',
+        slaStartAt: '2026-10-28T08:00:00.000Z',
+      }),
+    ).toBe('2026-10-28T08:00:00.000Z');
   });
 
   it('maps every category to a known team', () => {

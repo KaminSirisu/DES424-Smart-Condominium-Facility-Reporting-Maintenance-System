@@ -11,7 +11,7 @@ import {
   mergeTickets,
   type MergeChange,
 } from '../shared/ticket-repository.js';
-import { computeDeadline, isTeamId } from '../triage/policy.js';
+import { computeDeadline, isTeamId, slaStartOf } from '../triage/policy.js';
 import {
   errorResponse,
   isConditionalCheckFailure,
@@ -132,7 +132,7 @@ function isMergedInto(source: TicketRecord, canonicalId: string): boolean {
 function priorityAndDeadline(
   canonical: TicketRecord,
   sources: TicketRecord[],
-): Pick<MergeChange, 'priority' | 'deadlineAt'> {
+): Pick<MergeChange, 'priority' | 'deadlineAt' | 'slaStartAt'> {
   const all = [canonical, ...sources];
   const ranked = all
     .map((t) => t.priority)
@@ -143,13 +143,18 @@ function priorityAndDeadline(
     PRIORITY_RANK[b] > PRIORITY_RANK[a] ? b : a,
   );
   const earliest = all
-    .map((t) => t.createdAt)
+    .map(slaStartOf)
     .reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a));
   const deadlineAt = computeDeadline(earliest, canonical.teamId, highest);
 
   return {
     ...(highest !== canonical.priority ? { priority: highest } : {}),
     ...(deadlineAt !== canonical.deadlineAt ? { deadlineAt } : {}),
+    // createdAt stays (it is part of index keys), so the earlier start is kept
+    // apart for any later recount of the deadline, such as a priority change.
+    ...(Date.parse(earliest) < Date.parse(slaStartOf(canonical))
+      ? { slaStartAt: earliest }
+      : {}),
   };
 }
 
@@ -269,6 +274,7 @@ export async function handler(
       version: canonical.version + 1,
       ...(change.priority ? { priority: change.priority } : {}),
       ...(change.deadlineAt ? { deadlineAt: change.deadlineAt } : {}),
+      ...(change.slaStartAt ? { slaStartAt: change.slaStartAt } : {}),
     };
     return json(200, toTicketView(updated));
   } catch (err) {

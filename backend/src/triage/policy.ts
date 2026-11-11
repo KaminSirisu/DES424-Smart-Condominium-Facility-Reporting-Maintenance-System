@@ -76,6 +76,18 @@ const TEAM_RESOLUTION_HOURS: Partial<
 
 export const SLA_POLICY_VERSION = 1;
 
+/**
+ * When a ticket's SLA clock started: its creation, or the earlier start of a
+ * ticket that was merged into it (SLA-09). A deadline is always counted from
+ * this time, also when the priority changes (SLA-07).
+ */
+export function slaStartOf(ticket: {
+  createdAt: string;
+  slaStartAt?: string;
+}): string {
+  return ticket.slaStartAt ?? ticket.createdAt;
+}
+
 export function resolutionHours(teamId: TeamId, priority: Priority): number {
   return (
     TEAM_RESOLUTION_HOURS[teamId]?.[priority] ??

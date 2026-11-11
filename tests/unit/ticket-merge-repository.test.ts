@@ -140,6 +140,23 @@ describe('mergeTickets', () => {
     });
   });
 
+  it('keeps the earlier SLA start the canonical ticket takes over from a merged ticket', async () => {
+    await mergeTickets(ticket(), [source1], {
+      ...change,
+      reporters: [],
+      deadlineAt: '2026-11-05T12:00:00.000Z',
+      slaStartAt: '2026-11-05T06:00:00.000Z',
+    });
+
+    const [update] = items();
+    expect(update.Update?.UpdateExpression).toBe(
+      'SET updatedAt = :now, #version = #version + :one, deadlineAt = :deadlineAt, slaStartAt = :slaStartAt',
+    );
+    expect(update.Update?.ExpressionAttributeValues).toMatchObject({
+      ':slaStartAt': '2026-11-05T06:00:00.000Z',
+    });
+  });
+
   it('marks each source MERGED, points it at the canonical ticket and takes it out of the open queue', async () => {
     await mergeTickets(ticket(), [source1, source2], change);
 
