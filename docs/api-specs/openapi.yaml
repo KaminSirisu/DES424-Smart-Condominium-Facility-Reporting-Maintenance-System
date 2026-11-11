@@ -305,9 +305,16 @@ paths:
       tags: [Tickets]
       summary: Reassign an unstarted ticket to another team
       description: >-
-        Manager only. Reassignment is allowed while ASSIGNED, before work
-        starts. It records the old team, new team, actor, reason, and time.
-        Reassigning IN_PROGRESS work needs a separate exception policy.
+        Manager only; a technician gets 403. Reassignment is allowed while
+        ASSIGNED, before work starts; any other status is 409. Reassigning
+        IN_PROGRESS work needs a separate exception policy. A teamId that is
+        not a maintenance team is 422, and the reason is required (400
+        without it). The ticket leaves the old team's open queue and enters the
+        new team's, and the deadline is counted again with the new team's SLA
+        policy from the start of the SLA clock (SLA-08). A REASSIGNED event
+        records the old team, new team, actor, reason, and time. The category
+        the AI chose is not changed. Asking for the team the ticket already
+        has is 200 and writes nothing.
       operationId: reassignTicket
       security:
         - staffToken: []
@@ -827,7 +834,8 @@ components:
             Written so far: CREATED, TRIAGED, STATUS_CHANGED, MERGED (on a
             merged source), DUPLICATES_MERGED (on the canonical ticket) and
             REOPENED (fromStatus DONE, toStatus ASSIGNED, repairCycle of the new
-            cycle, note is the reporter's reason). STATUS_CHANGED, MERGED and
+            cycle, note is the reporter's reason) and REASSIGNED (fromTeamId,
+            toTeamId, note is the manager's reason). STATUS_CHANGED, MERGED and
             REOPENED carry fromStatus and toStatus. The staff
             UI also shows PRIORITY_CHANGED and PRIORITY_CONFIRMED, which the
             priority endpoint writes (fromPriority, toPriority, note), and any
