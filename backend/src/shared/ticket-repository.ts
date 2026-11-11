@@ -204,8 +204,9 @@ export class QuotaExceededError extends Error {
  */
 export async function createTicket(
   record: TicketRecord,
-  quota?: TicketQuotaClaim,
+  quota?: TicketQuotaClaim | TicketQuotaClaim[],
 ): Promise<void> {
+  const claims = quota === undefined ? [] : [quota].flat();
   const items = [
     {
       Put: {
@@ -232,7 +233,7 @@ export async function createTicket(
         Item: toEventItem(toCreatedEvent(record)),
       },
     },
-    ...(quota ? [{ Update: quota.update }] : []),
+    ...claims.map((claim) => ({ Update: claim.update })),
   ];
 
   try {
@@ -242,12 +243,20 @@ export async function createTicket(
       (err as { CancellationReasons?: { Code?: string }[] })
         .CancellationReasons ?? [];
     if (
-      quota &&
       (err as { name?: string }).name === 'TransactionCanceledException' &&
-      reasons[items.length - 1]?.Code === 'ConditionalCheckFailed' &&
       reasons[0]?.Code !== 'ConditionalCheckFailed'
     ) {
-      throw new QuotaExceededError(quota.retryAfterSeconds);
+      // The counters are the last items. The caller may retry when the
+      // longest refusal is over.
+      const firstClaim = items.length - claims.length;
+      const refused = claims.filter(
+        (_, i) => reasons[firstClaim + i]?.Code === 'ConditionalCheckFailed',
+      );
+      if (refused.length > 0) {
+        throw new QuotaExceededError(
+          Math.max(...refused.map((c) => c.retryAfterSeconds)),
+        );
+      }
     }
     throw err;
   }

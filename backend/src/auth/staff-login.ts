@@ -14,6 +14,8 @@ import {
   signMfaChallenge,
 } from '../shared/mfa-challenge.js';
 import { managerMfaRequired } from '../shared/mfa-policy.js';
+import { sourceIpOf } from '../shared/client-ip.js';
+import { consumeLoginIpQuota } from '../shared/rate-limit.js';
 import { errorResponse, json } from '../tickets/staff-http.js';
 import { ApiError } from '../tickets/types.js';
 import { parseJsonObject } from './json-body.js';
@@ -36,8 +38,9 @@ import { noStore, sessionResponse } from './staff-session.js';
  * A wrong email, a wrong password and a disabled account all get the same
  * `401` and message, so an answer never says which accounts exist. The five
  * failed logins in a row lock the account for 15 minutes (SR-09): while it is
- * locked, even the right password gets `429` with Retry-After. The per-IP
- * limit of SR-09 is an AWS WAF rule on API Gateway, not code.
+ * locked, even the right password gets `429` with Retry-After. A second limit
+ * is per address: 20 attempts per 15 minutes from one address (SR-09, counted
+ * in shared/rate-limit.ts), also `429` with Retry-After.
  *
  * Passwords and tokens are never logged.
  */
@@ -80,8 +83,24 @@ export async function handler(
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   try {
-    const { email, password } = parseBody(event);
     const now = new Date();
+
+    // Counted first, so every attempt from an address counts, also one with a
+    // wrong password or a body that cannot be read.
+    const ip = sourceIpOf(event);
+    if (ip) {
+      const quota = await consumeLoginIpQuota(ip, now);
+      if (!quota.allowed) {
+        throw new ApiError(
+          429,
+          'RATE_LIMITED',
+          'Too many login attempts from this address. Please try again later.',
+          { 'Retry-After': String(quota.retryAfterSeconds) },
+        );
+      }
+    }
+
+    const { email, password } = parseBody(event);
 
     const account = await getAccountByUsername(email);
     if (account && isLocked(account, now) && account.lockedUntil) {

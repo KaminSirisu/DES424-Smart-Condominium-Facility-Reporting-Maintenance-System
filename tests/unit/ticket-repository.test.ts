@@ -11,7 +11,10 @@ import {
   createTicket,
   getTicket,
 } from '../../backend/src/shared/ticket-repository.js';
-import { ticketQuotaClaim } from '../../backend/src/shared/rate-limit.js';
+import {
+  ticketIpQuotaClaim,
+  ticketQuotaClaim,
+} from '../../backend/src/shared/rate-limit.js';
 import type { TriageUpdate } from '../../backend/src/shared/ticket-repository.js';
 import type { TicketRecord } from '../../backend/src/tickets/types.js';
 
@@ -166,6 +169,121 @@ describe('createTicket', () => {
       expect(last.Update?.Key).toEqual({
         limitKey: 'TICKET_CREATE#Uabc123',
         windowStart: 1793181600,
+      });
+    });
+
+    it('counts a list of claims, the reporter and the address, in that order', async () => {
+      const ipClaim = ticketIpQuotaClaim(
+        '203.0.113.7',
+        new Date('2026-10-28T10:30:00Z'),
+      );
+      await createTicket(record(), [claim(), ipClaim]);
+
+      const items = transactItems();
+      expect(items).toHaveLength(6);
+      expect((items[4] as { Update?: SentItem }).Update?.Key).toEqual({
+        limitKey: 'TICKET_CREATE#Uabc123',
+        windowStart: 1793181600,
+      });
+      expect((items[5] as { Update?: SentItem }).Update?.Key).toEqual({
+        limitKey: 'TICKET_CREATE_IP#203.0.113.7',
+        windowStart: 1793181600,
+      });
+    });
+
+    it('writes no counter for an empty list', async () => {
+      await createTicket(record(), []);
+      expect(transactItems()).toHaveLength(4);
+    });
+
+    describe('when either of two counters refuses', () => {
+      const earlier = () =>
+        ticketQuotaClaim('Uabc123', new Date('2026-10-28T10:50:00Z')); // 600 s left
+      const later = () =>
+        ticketIpQuotaClaim('203.0.113.7', new Date('2026-10-28T10:10:00Z')); // 3000 s left
+
+      it('says how long until the reporter counter resets when only it refuses', async () => {
+        send.mockRejectedValue(
+          cancelled([
+            'None',
+            'None',
+            'None',
+            'None',
+            'ConditionalCheckFailed',
+            'None',
+          ]),
+        );
+        await expect(
+          createTicket(record(), [earlier(), later()]),
+        ).rejects.toMatchObject({
+          name: 'QuotaExceededError',
+          retryAfterSeconds: 600,
+        });
+      });
+
+      it('says how long until the address counter resets when only it refuses', async () => {
+        send.mockRejectedValue(
+          cancelled([
+            'None',
+            'None',
+            'None',
+            'None',
+            'None',
+            'ConditionalCheckFailed',
+          ]),
+        );
+        await expect(
+          createTicket(record(), [earlier(), later()]),
+        ).rejects.toMatchObject({
+          name: 'QuotaExceededError',
+          retryAfterSeconds: 3000,
+        });
+      });
+
+      it('waits for the longer one when both refuse', async () => {
+        send.mockRejectedValue(
+          cancelled([
+            'None',
+            'None',
+            'None',
+            'None',
+            'ConditionalCheckFailed',
+            'ConditionalCheckFailed',
+          ]),
+        );
+        await expect(
+          createTicket(record(), [earlier(), later()]),
+        ).rejects.toMatchObject({ retryAfterSeconds: 3000 });
+      });
+
+      it('rethrows the duplicate-ticket failure when the ticket already exists', async () => {
+        const duplicate = cancelled([
+          'ConditionalCheckFailed',
+          'None',
+          'None',
+          'None',
+          'ConditionalCheckFailed',
+          'ConditionalCheckFailed',
+        ]);
+        send.mockRejectedValue(duplicate);
+        await expect(createTicket(record(), [earlier(), later()])).rejects.toBe(
+          duplicate,
+        );
+      });
+
+      it('rethrows a failure that is not a refused counter', async () => {
+        const other = cancelled([
+          'None',
+          'None',
+          'None',
+          'None',
+          'None',
+          'ThrottlingError',
+        ]);
+        send.mockRejectedValue(other);
+        await expect(createTicket(record(), [earlier(), later()])).rejects.toBe(
+          other,
+        );
       });
     });
 

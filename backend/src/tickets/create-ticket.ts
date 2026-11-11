@@ -4,7 +4,8 @@ import type {
   APIGatewayProxyStructuredResultV2,
 } from 'aws-lambda';
 import { extractBearerToken, verifyLineToken } from '../shared/line-token.js';
-import { ticketQuotaClaim } from '../shared/rate-limit.js';
+import { sourceIpOf } from '../shared/client-ip.js';
+import { ticketIpQuotaClaim, ticketQuotaClaim } from '../shared/rate-limit.js';
 import {
   QuotaExceededError,
   createTicket,
@@ -261,9 +262,14 @@ export async function handler(
     };
 
     try {
-      // The quota is claimed in the same transaction, so a ticket that is not
-      // stored (a retry, a lost race, a failure) never uses it up.
-      await createTicket(record, ticketQuotaClaim(lineUserId));
+      // The quotas (per reporter and per address) are claimed in the same
+      // transaction, so a ticket that is not stored (a retry, a lost race, a
+      // failure) never uses them up.
+      const ip = sourceIpOf(event);
+      await createTicket(record, [
+        ticketQuotaClaim(lineUserId),
+        ...(ip ? [ticketIpQuotaClaim(ip)] : []),
+      ]);
     } catch (err) {
       if (err instanceof QuotaExceededError) {
         throw new ApiError(

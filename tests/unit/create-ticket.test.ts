@@ -23,6 +23,7 @@ vi.mock(
 );
 vi.mock('../../backend/src/shared/rate-limit', () => ({
   ticketQuotaClaim: vi.fn(),
+  ticketIpQuotaClaim: vi.fn(),
 }));
 vi.mock('../../backend/src/shared/upload-store', async (importOriginal) => ({
   ...(await importOriginal<
@@ -41,13 +42,20 @@ import {
   createTicket,
   getTicket,
 } from '../../backend/src/shared/ticket-repository';
-import { ticketQuotaClaim } from '../../backend/src/shared/rate-limit';
+import {
+  ticketIpQuotaClaim,
+  ticketQuotaClaim,
+} from '../../backend/src/shared/rate-limit';
 import { uploadIsImage } from '../../backend/src/shared/upload-store';
 
 const LINE_USER = 'Uabc123';
 const CLAIM = {
   update: { TableName: 'RateLimits' },
   retryAfterSeconds: 1234,
+} as unknown as ReturnType<typeof ticketQuotaClaim>;
+const IP_CLAIM = {
+  update: { TableName: 'RateLimits', Key: 'ip' },
+  retryAfterSeconds: 99,
 } as unknown as ReturnType<typeof ticketQuotaClaim>;
 const KEY = 'idem-key-0001';
 const validBody = {
@@ -60,6 +68,7 @@ function makeEvent(
   overrides: {
     body?: unknown;
     headers?: Record<string, string | undefined>;
+    sourceIp?: string;
   } = {},
 ): APIGatewayProxyEventV2 {
   const body = 'body' in overrides ? overrides.body : validBody;
@@ -70,7 +79,13 @@ function makeEvent(
       'idempotency-key': KEY,
       ...overrides.headers,
     },
-    requestContext: { requestId: 'req-1', http: { method: 'POST' } },
+    requestContext: {
+      requestId: 'req-1',
+      http: {
+        method: 'POST',
+        ...(overrides.sourceIp ? { sourceIp: overrides.sourceIp } : {}),
+      },
+    },
   } as unknown as APIGatewayProxyEventV2;
 }
 
@@ -105,6 +120,7 @@ describe('POST /tickets (createTicket handler)', () => {
     vi.mocked(uploadIsImage).mockResolvedValue(true);
     vi.mocked(createTicket).mockResolvedValue(undefined);
     vi.mocked(ticketQuotaClaim).mockReturnValue(CLAIM);
+    vi.mocked(ticketIpQuotaClaim).mockReturnValue(IP_CLAIM);
   });
 
   it('stores a RECEIVED ticket and returns a caller-safe 201', async () => {
@@ -151,7 +167,34 @@ describe('POST /tickets (createTicket handler)', () => {
       expect(ticketQuotaClaim).toHaveBeenCalledOnce();
       expect(ticketQuotaClaim).toHaveBeenCalledWith(LINE_USER);
       expect(createTicket).toHaveBeenCalledOnce();
-      expect(vi.mocked(createTicket).mock.calls[0][1]).toBe(CLAIM);
+      // No address in the event, so only the reporter is counted.
+      expect(ticketIpQuotaClaim).not.toHaveBeenCalled();
+      expect(vi.mocked(createTicket).mock.calls[0][1]).toEqual([CLAIM]);
+    });
+
+    it('also claims one creation for the address API Gateway saw, in the same transaction', async () => {
+      await handler(makeEvent({ sourceIp: '203.0.113.7' }));
+
+      expect(ticketIpQuotaClaim).toHaveBeenCalledOnce();
+      expect(ticketIpQuotaClaim).toHaveBeenCalledWith('203.0.113.7');
+      expect(createTicket).toHaveBeenCalledOnce();
+      expect(vi.mocked(createTicket).mock.calls[0][1]).toEqual([
+        CLAIM,
+        IP_CLAIM,
+      ]);
+    });
+
+    it('claims nothing for the address of a replay or a rejected request', async () => {
+      vi.mocked(getTicket).mockResolvedValue(storedRecord());
+      await handler(makeEvent({ sourceIp: '203.0.113.7' }));
+      await handler(
+        makeEvent({
+          sourceIp: '203.0.113.7',
+          headers: { authorization: undefined },
+        }),
+      );
+      expect(ticketIpQuotaClaim).not.toHaveBeenCalled();
+      expect(createTicket).not.toHaveBeenCalled();
     });
 
     it('returns 429 with Retry-After once the limit is used up', async () => {

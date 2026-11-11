@@ -13,6 +13,9 @@ vi.mock('../../backend/src/shared/accounts', async (importOriginal) => ({
 }));
 
 vi.mock('../../backend/src/shared/teams', () => ({ getTeamName: vi.fn() }));
+vi.mock('../../backend/src/shared/rate-limit', () => ({
+  consumeLoginIpQuota: vi.fn(),
+}));
 
 import { handler } from '../../backend/src/auth/staff-login';
 import {
@@ -20,6 +23,7 @@ import {
   recordFailedLogin,
   recordSuccessfulLogin,
 } from '../../backend/src/shared/accounts';
+import { consumeLoginIpQuota } from '../../backend/src/shared/rate-limit';
 import { verifyMfaChallenge } from '../../backend/src/shared/mfa-challenge';
 import { verifyStaffToken } from '../../backend/src/shared/staff-token';
 import { getTeamName } from '../../backend/src/shared/teams';
@@ -85,6 +89,7 @@ describe('POST /auth/staff/login', () => {
     getAccount.mockResolvedValue(technician);
     failedLogin.mockResolvedValue({ locked: false });
     successfulLogin.mockResolvedValue(undefined);
+    vi.mocked(consumeLoginIpQuota).mockResolvedValue({ allowed: true });
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -238,6 +243,79 @@ describe('POST /auth/staff/login', () => {
       expect(body.accessToken).toEqual(expect.any(String));
       expect(body).not.toHaveProperty('mfaRequired');
       expect(successfulLogin).toHaveBeenCalled();
+    });
+  });
+
+  describe('the limit per address (SR-09)', () => {
+    const fromIp = (ip: string | undefined, raw?: string) => {
+      const base = raw
+        ? event(undefined, raw)
+        : event({ email: 'plumbing@example.com', password: PASSWORD });
+      (base.requestContext as { http: Record<string, unknown> }).http = {
+        method: 'POST',
+        ...(ip ? { sourceIp: ip } : {}),
+      };
+      return handler(base);
+    };
+
+    it('counts the attempt for the address API Gateway saw, and lets it through', async () => {
+      const result = await fromIp('203.0.113.7');
+
+      expect(result.statusCode).toBe(200);
+      expect(consumeLoginIpQuota).toHaveBeenCalledOnce();
+      expect(consumeLoginIpQuota).toHaveBeenCalledWith(
+        '203.0.113.7',
+        expect.any(Date),
+      );
+    });
+
+    it('answers 429 with Retry-After once the address is out of attempts, before anything else is looked at', async () => {
+      vi.mocked(consumeLoginIpQuota).mockResolvedValue({
+        allowed: false,
+        retryAfterSeconds: 421,
+      });
+
+      const result = await fromIp('203.0.113.7');
+
+      expect(result.statusCode).toBe(429);
+      expect(result.headers?.['Retry-After']).toBe('421');
+      expect(bodyOf(result).error).toMatchObject({
+        code: 'RATE_LIMITED',
+        requestId: 'req-1',
+      });
+      expect(getAccount).not.toHaveBeenCalled();
+      expect(failedLogin).not.toHaveBeenCalled();
+      expect(successfulLogin).not.toHaveBeenCalled();
+    });
+
+    it('counts an attempt whose body cannot be read, and a wrong password', async () => {
+      expect((await fromIp('203.0.113.7', '{nope')).statusCode).toBe(400);
+      expect(consumeLoginIpQuota).toHaveBeenCalledTimes(1);
+
+      getAccount.mockResolvedValue(technician);
+      const wrong = event({
+        email: 'plumbing@example.com',
+        password: 'x'.repeat(14),
+      });
+      (wrong.requestContext as { http: Record<string, unknown> }).http = {
+        method: 'POST',
+        sourceIp: '203.0.113.7',
+      };
+      expect((await handler(wrong)).statusCode).toBe(401);
+      expect(consumeLoginIpQuota).toHaveBeenCalledTimes(2);
+    });
+
+    it('counts nothing when the event has no address', async () => {
+      const result = await fromIp(undefined);
+      expect(result.statusCode).toBe(200);
+      expect(consumeLoginIpQuota).not.toHaveBeenCalled();
+    });
+
+    it('answers 500, and never lets the login through, when the counter cannot be written', async () => {
+      vi.mocked(consumeLoginIpQuota).mockRejectedValue(new Error('throttled'));
+      const result = await fromIp('203.0.113.7');
+      expect(result.statusCode).toBe(500);
+      expect(getAccount).not.toHaveBeenCalled();
     });
   });
 
