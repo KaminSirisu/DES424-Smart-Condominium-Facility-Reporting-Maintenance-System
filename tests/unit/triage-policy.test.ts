@@ -29,17 +29,20 @@ describe('triage policy', () => {
   });
 
   it('gives each priority its default resolution time', () => {
-    expect(resolutionHours('PLUMBING', 'CRITICAL')).toBe(4);
-    expect(resolutionHours('PLUMBING', 'MEDIUM')).toBe(24);
-    expect(resolutionHours('PLUMBING', 'LOW')).toBe(120);
+    expect(resolutionHours('PLUMBING', 'CRITICAL')).toBe(3);
+    expect(resolutionHours('PLUMBING', 'MEDIUM')).toBe(12);
+    expect(resolutionHours('PLUMBING', 'LOW')).toBe(48);
   });
 
   it('counts the deadline from ticket creation', () => {
     expect(
       computeDeadline('2026-10-28T10:00:00.000Z', 'ELECTRICAL', 'CRITICAL'),
-    ).toBe('2026-10-28T14:00:00.000Z');
+    ).toBe('2026-10-28T13:00:00.000Z');
     expect(computeDeadline('2026-10-28T10:00:00.000Z', 'HVAC', 'LOW')).toBe(
-      '2026-11-02T10:00:00.000Z',
+      '2026-10-30T10:00:00.000Z',
+    );
+    expect(computeDeadline('2026-10-28T10:00:00.000Z', 'HVAC', 'MEDIUM')).toBe(
+      '2026-10-28T22:00:00.000Z',
     );
   });
 

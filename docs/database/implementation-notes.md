@@ -352,11 +352,11 @@ A new ticket is stored as `RECEIVED` with no category, priority or team. A worke
 
 | Priority | Hours from `createdAt` to `DONE` |
 | -------- | -------------------------------- |
-| CRITICAL | 4                                |
-| MEDIUM   | 24                               |
-| LOW      | 120                              |
+| CRITICAL | 3                                |
+| MEDIUM   | 12                               |
+| LOW      | 48                               |
 
-The deadline is counted from ticket creation, so slow triage uses up SLA time. The requirements document calls the top priority `HIGH`; `openapi.yaml` calls it `CRITICAL`, and the team chose `CRITICAL`. Each category maps to the team of the same name: `ELECTRICAL`, `PLUMBING`, `HVAC`, `CLEANING_SANITATION`, `BUILDING_EQUIPMENT`.
+The deadline is counted from ticket creation, so slow triage uses up SLA time. The hours are the ones the team gave on 2026-11-11 (3, 12 and 48, the same for every team); the requirements document (§3.5) proposed 4, 24 and 120. They are set in `DEFAULT_RESOLUTION_HOURS` in `backend/src/triage/policy.ts` and `SLA_POLICY_VERSION` records the policy a ticket was given (SLA-05): version 1 is 4, 24 and 120, version 2 is 3, 12 and 48. A ticket created before the change keeps version 1 and its old deadline until a priority, team, merge or reopen change counts it again. The requirements document calls the top priority `HIGH`; `openapi.yaml` calls it `CRITICAL`, and the team chose `CRITICAL`. Each category maps to the team of the same name: `ELECTRICAL`, `PLUMBING`, `HVAC`, `CLEANING_SANITATION`, `BUILDING_EQUIPMENT`.
 
 **Safety override (SLA-02).** Before the matrix is applied, `backend/src/triage/safety.ts` scans the description for English keywords of a safety hazard: `FIRE`, `SMOKE`, `GAS`, `ELECTRIC_SHOCK`, `FLOOD_NEAR_ELECTRICAL` (water together with electrical equipment) or `TRAPPED`. If one matches, `priority` is `CRITICAL` whatever the matrix says, and the deadline is the CRITICAL one (4 hours from `createdAt`). `suggestedPriority` still holds the matrix result. The scan runs in code on the resident's text, not in the AI, so a crafted description cannot lower it. Phrases that name safety equipment (for example "fire extinguisher") or an air-conditioning gas refill do not trigger it.
 

@@ -79,7 +79,7 @@ const main: TicketRecord = {
   category: 'PLUMBING',
   priority: 'MEDIUM',
   prioritySetBy: 'AI',
-  deadlineAt: '2026-11-06T08:00:00.000Z',
+  deadlineAt: '2026-11-05T20:00:00.000Z',
   createdAt: '2026-11-05T08:00:00.000Z',
   updatedAt: '2026-11-05T08:05:00.000Z',
 };
@@ -89,7 +89,7 @@ const dup1: TicketRecord = {
   version: 2,
   reporterLineUserId: 'Ubbb',
   createdAt: '2026-11-05T08:30:00.000Z',
-  deadlineAt: '2026-11-06T08:30:00.000Z',
+  deadlineAt: '2026-11-05T20:30:00.000Z',
 };
 const dup2: TicketRecord = {
   ...dup1,
@@ -98,7 +98,7 @@ const dup2: TicketRecord = {
   version: 3,
   reporterLineUserId: 'Uccc',
   createdAt: '2026-11-05T09:00:00.000Z',
-  deadlineAt: '2026-11-06T09:00:00.000Z',
+  deadlineAt: '2026-11-05T21:00:00.000Z',
 };
 
 const tickets = new Map<string, TicketRecord | null>();
@@ -194,13 +194,13 @@ describe('POST /tickets/{ticketId}/merge', () => {
 
       const change = vi.mocked(mergeTickets).mock.calls[0][2];
       expect(change.priority).toBe('CRITICAL');
-      // 4 hours after the earliest creation time, 07:00.
-      expect(change.deadlineAt).toBe('2026-11-05T11:00:00.000Z');
+      // 3 hours after the earliest creation time, 07:00.
+      expect(change.deadlineAt).toBe('2026-11-05T10:00:00.000Z');
       // createdAt stays; the earlier start is kept apart for later recounts.
       expect(change.slaStartAt).toBe('2026-11-05T07:00:00.000Z');
       expect(body(response)).toMatchObject({
         priority: 'CRITICAL',
-        deadlineAt: '2026-11-05T11:00:00.000Z',
+        deadlineAt: '2026-11-05T10:00:00.000Z',
         createdAt: '2026-11-05T08:00:00.000Z',
       });
       expect(body(response)).not.toHaveProperty('slaStartAt');
@@ -216,7 +216,8 @@ describe('POST /tickets/{ticketId}/merge', () => {
 
       const change = vi.mocked(mergeTickets).mock.calls[0][2];
       expect(change).not.toHaveProperty('priority');
-      expect(change.deadlineAt).toBe('2026-11-06T06:00:00.000Z');
+      // 12 hours (MEDIUM) after the earliest creation time, 06:00.
+      expect(change.deadlineAt).toBe('2026-11-05T18:00:00.000Z');
       expect(change.slaStartAt).toBe('2026-11-05T06:00:00.000Z');
     });
 

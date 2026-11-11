@@ -62,11 +62,14 @@ export function priorityFor(impact: Level, urgency: Level): Priority {
   return MATRIX[impact][urgency];
 }
 
-/** Default hours from created_at to DONE (requirements doc §3.5). */
+/**
+ * Default hours from created_at to DONE, as the team set them: the same for
+ * every team. The requirements document (§3.5) proposed 4, 24 and 120.
+ */
 const DEFAULT_RESOLUTION_HOURS: Record<Priority, number> = {
-  CRITICAL: 4,
-  MEDIUM: 24,
-  LOW: 120,
+  CRITICAL: 3,
+  MEDIUM: 12,
+  LOW: 48,
 };
 
 /** Per-team overrides; empty until the juristic office confirms any. */
@@ -74,7 +77,8 @@ const TEAM_RESOLUTION_HOURS: Partial<
   Record<TeamId, Partial<Record<Priority, number>>>
 > = {};
 
-export const SLA_POLICY_VERSION = 1;
+/** 1: the hours of requirements §3.5 (4, 24, 120). 2: the team's hours (3, 12, 48). */
+export const SLA_POLICY_VERSION = 2;
 
 /**
  * When a ticket's current SLA clock started: its creation, the earlier start
