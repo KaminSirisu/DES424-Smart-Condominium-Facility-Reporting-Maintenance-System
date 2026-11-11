@@ -7,6 +7,7 @@ import { getTicket } from '../shared/ticket-repository.js';
 import type { NotificationChannel, NotificationEvent } from './channel.js';
 import { lineReporterChannel } from './line-notification.js';
 import { hasSent, markSent } from './notification-log.js';
+import { emailSupervisorsChannel } from './sla-breach-notification.js';
 import { sendWorkOrderEmail } from './work-order-email.js';
 
 /**
@@ -47,6 +48,7 @@ const emailTeamChannel: NotificationChannel = {
 export const CHANNELS: readonly NotificationChannel[] = [
   emailTeamChannel,
   lineReporterChannel,
+  emailSupervisorsChannel,
 ];
 
 /**

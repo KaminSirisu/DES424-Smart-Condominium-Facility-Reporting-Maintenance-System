@@ -21,6 +21,15 @@ vi.mock('../../backend/src/notifications/line-notification', () => ({
   },
 }));
 
+vi.mock('../../backend/src/notifications/sla-breach-notification', () => ({
+  emailSupervisorsChannel: {
+    name: 'EMAIL_SUPERVISORS',
+    kinds: ['SLA_BREACHED'],
+    recipients: vi.fn(),
+    send: vi.fn(),
+  },
+}));
+
 import {
   CHANNELS,
   handler,
@@ -34,6 +43,10 @@ import {
 import { sendWorkOrderEmail } from '../../backend/src/notifications/work-order-email';
 import { lineReporterChannel } from '../../backend/src/notifications/line-notification';
 
+import { emailSupervisorsChannel } from '../../backend/src/notifications/sla-breach-notification';
+
+const supervisorRecipients = vi.mocked(emailSupervisorsChannel.recipients);
+const supervisorSend = vi.mocked(emailSupervisorsChannel.send);
 const lineRecipients = vi.mocked(lineReporterChannel.recipients);
 const lineSend = vi.mocked(lineReporterChannel.send);
 
@@ -126,6 +139,50 @@ describe('notification stream handler', () => {
       'EMAIL_TEAM:PLUMBING',
       expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     );
+  });
+
+  it('alerts every supervisor, and nobody else, when an SLA breach is recorded', async () => {
+    supervisorRecipients.mockResolvedValue(['a@example.com', 'b@example.com']);
+    supervisorSend.mockResolvedValue(true);
+
+    const result = await handler(eventOf(record('SLA_BREACHED', '1')));
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    expect(supervisorSend).toHaveBeenCalledTimes(2);
+    expect(supervisorSend).toHaveBeenCalledWith(ticket(), 'a@example.com', {
+      ticketId: 'tkt_1',
+      eventId: 'tkt_1_sla_breached',
+      kind: 'SLA_BREACHED',
+    });
+    expect(
+      vi.mocked(markSent).mock.calls.map((call) => call.slice(0, 3)),
+    ).toEqual([
+      ['tkt_1', 'tkt_1_sla_breached', 'EMAIL_SUPERVISORS:a@example.com'],
+      ['tkt_1', 'tkt_1_sla_breached', 'EMAIL_SUPERVISORS:b@example.com'],
+    ]);
+    // The reporters and the team are not told that the team is late.
+    expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).not.toHaveBeenCalled();
+  });
+
+  it('does not alert a supervisor again on a retry, and does not alert for other events', async () => {
+    supervisorRecipients.mockResolvedValue(['a@example.com', 'b@example.com']);
+    supervisorSend.mockResolvedValue(true);
+    vi.mocked(hasSent).mockImplementation(
+      async (_t, _e, key) => key === 'EMAIL_SUPERVISORS:a@example.com',
+    );
+
+    await handler(eventOf(record('SLA_BREACHED', '1')));
+    expect(supervisorSend).toHaveBeenCalledTimes(1);
+    expect(supervisorSend).toHaveBeenCalledWith(
+      ticket(),
+      'b@example.com',
+      expect.anything(),
+    );
+
+    supervisorSend.mockClear();
+    await handler(eventOf(triaged(), created('2')));
+    expect(supervisorSend).not.toHaveBeenCalled();
   });
 
   it('sends only the LINE receipt when a ticket is created', async () => {
@@ -363,7 +420,7 @@ describe('independent channels', () => {
 
     it('rejects a name that matches no channel, and says which', () => {
       expect(() => selectChannels('LINE_REPORTER,SMS')).toThrow(
-        /unknown channel: SMS\. Known channels: EMAIL_TEAM, LINE_REPORTER/,
+        /unknown channel: SMS\. Known channels: EMAIL_TEAM, LINE_REPORTER, EMAIL_SUPERVISORS\./,
       );
       // case matters: a channel name is part of the notification log keys
       expect(() => selectChannels('line_reporter')).toThrow('unknown channel');
