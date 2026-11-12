@@ -1,6 +1,6 @@
 # G02 AWS deployment and smoke-test log
 
-Last verified: **2026-11-10 (Asia/Bangkok)**. Environment: AWS account
+Last verified: **2026-11-12 (Asia/Bangkok)**. Environment: AWS account
 `528301714999`, region `ap-southeast-1`, CloudFormation stack
 `Des424G02ScfrmsDev`. This records observed development-environment behavior;
 it is not a production readiness claim.
@@ -9,7 +9,7 @@ it is not a production readiness claim.
 
 | Slice               | Deployed resources and result                                                                                                                                                                                                                                                      |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Foundation          | Group-owned CDK asset bucket, eight on-demand DynamoDB tables, private S3 upload bucket, placeholder LINE Messaging API secret, API Gateway HTTP API, and health Lambda. `GET /v1/health` returned HTTP 200 with `{"status":"ok"}`.                                                |
+| Foundation          | Group-owned CDK asset bucket, eight on-demand DynamoDB tables, private S3 upload bucket, initially placeholder LINE Messaging API secret (later replaced), API Gateway HTTP API, and health Lambda. `GET /v1/health` returned HTTP 200 with `{"status":"ok"}`.                     |
 | Reporter intake     | `POST /v1/uploads` and `POST /v1/tickets` Lambda routes with LINE Login ID-token verification. A real JPEG was uploaded with a presigned S3 URL, then a ticket was created in DynamoDB with status `RECEIVED`.                                                                     |
 | AI triage           | Tickets DynamoDB Stream event source, triage Lambda, CloudWatch log group, and SQS failure queue. A newly inserted ticket was classified and updated to `ASSIGNED`. The worker uses `anthropic.claude-sonnet-5` in Singapore.                                                      |
 | Staff auth          | `POST /v1/auth/staff/login` and `GET /v1/auth/staff/me` Lambda routes, plus a generated signing secret in Secrets Manager. A seeded manager account passed the authenticated login and `/me` smoke test. Unauthenticated route checks returned the expected 400 and 401 responses. |
@@ -17,6 +17,7 @@ it is not a production readiness claim.
 | Staff status        | `PATCH /v1/tickets/{ticketId}/status` and technician `REPAIR_PROOF` uploads were deployed. A PLUMBING technician moved the test ticket from `ASSIGNED` to `IN_PROGRESS` to `DONE`, uploaded a JPEG proof, and read back the persisted result.                                      |
 | Staff history index | `TeamDoneIndex` was added to the Tickets table for completed-ticket queries. The PLUMBING technician's completed-list smoke test found the DONE ticket through the API.                                                                                                            |
 | Photo access        | `GET /v1/tickets/{ticketId}/photos/{photoId}/access` and a Lambda bundle containing native `sharp` were deployed. After correcting secret bootstrap and S3 lookup, the original reporter's live photo-access smoke test passed.                                                    |
+| Notifications       | The `TicketEvents` stream notification Lambda sent LINE messages to the reporter and an SES work order to the PLUMBING team after a fresh ticket was triaged. The team email reached Gmail Spam; delivery to the mailbox was confirmed, but Inbox placement was not.               |
 
 API base URL: `https://h5ekgxy0j7.execute-api.ap-southeast-1.amazonaws.com/v1`.
 The current deployment used the `infrastructure/api-intake-readiness`
@@ -30,7 +31,10 @@ npm run infra:deploy -- --require-approval never \
   -c enableStaffAuth=true \
   -c enableStaffTicketReads=true \
   -c enableStaffTicketWrites=true \
-  -c enablePhotoAccess=true
+  -c enablePhotoAccess=true \
+  -c enableNotifications=true \
+  -c sesSenderEmail=manager.des424@gmail.com \
+  -c liffUrl=https://liff.line.me/2011904216-fXRa82NM
 ```
 
 Pass the same context values on subsequent `infra:diff` and `infra:deploy`
@@ -173,17 +177,76 @@ The script checked ticket detail, unauthenticated rejection, a signed defect
 photo URL, the fetched JPEG's size, dimensions and absent EXIF, and missing
 photo handling. The token and signed URL were not recorded.
 
+On 2026-11-10, a fresh ticket `tkt_f0be93a07f6e43e8286e06189d` produced
+`CREATED` and `TRIAGED` events. The notification Lambda log recorded successful
+`LINE_REPORTER` sends for both events and an `EMAIL_TEAM` send for the triage
+event. The reporter observed the LINE messages. The PLUMBING team later found
+the work-order email in Gmail Spam. A direct SES delivery test to the same
+mailbox also arrived in Spam, so the missing Inbox message was not a missing
+team record or failed notification trigger. The sender
+`manager.des424@gmail.com` and recipient `tech.plumber.des424@gmail.com` were
+verified SES identities in Singapore. SES was still in sandbox mode. The
+sender email identity reported DKIM `NOT_STARTED`. In Gmail's "Show original"
+for the work-order email, SPF was `PASS`, DKIM was `PASS` for
+`amazonses.com`, and DMARC was `FAIL`. The authenticated SES domains therefore
+did not align with the `@gmail.com` From domain. This is a deliverability
+problem, although Gmail's complete spam-classification reason is unknown. No
+token or email password is recorded here.
+
+On 2026-11-12, after the PLUMBING technician's password was rotated privately,
+the live status/proof smoke test was rerun against that ticket:
+
+```text
+Staff status and proof upload passed for tkt_f0be93a07f6e43e8286e06189d: ASSIGNED -> IN_PROGRESS -> DONE.
+```
+
+The user observed LINE status messages during this test. It confirms the
+deployed status API, proof upload and reporter notifications for this ticket.
+The first test ticket had already passed the same transition earlier; this is
+the first recorded run after notifications were enabled. The technician
+password, staff token and LINE channel access token were not recorded.
+
+An ELECTRICAL intake smoke test created ticket
+`tkt_68acac20ba6835175fd47c95a4` with initial status `RECEIVED`; the user
+reported an assignment LINE message and a team work-order email. The first
+cross-team access script run passed with the literal placeholder
+`NEW_ELECTRICAL_TICKET_ID`, so its 404 checked a nonexistent ticket and is **not
+valid authorization evidence**. The script now checks DynamoDB for the actual
+other-team ticket before making the API access assertions. With the real ID
+and the PLUMBING technician account, the corrected live smoke test returned:
+
+```text
+Cross-team access passed: own tkt_f0be93a07f6e43e8286e06189d visible; ELECTRICAL ticket tkt_68acac20ba6835175fd47c95a4 hidden.
+```
+
+The script confirmed the ELECTRICAL ticket existed and belonged to that team,
+then checked HTTP 200 for the PLUMBING ticket, HTTP 404 for the ELECTRICAL
+ticket detail, and HTTP 403 for an ELECTRICAL team list request. No staff
+password or token was recorded. The AWS SDK printed a Node 20 support warning
+in CloudShell; the test still completed successfully.
+
 ## Next deployment gates
 
-- A cross-team ticket-detail check needs a known ticket assigned to another
-  team. A different-reporter denial check needs a second LINE account. Deploy
-  and test the remaining staff write routes and reporter reopen.
+- A different-reporter denial check needs a second LINE account. Deploy and
+  test the remaining staff write routes and reporter reopen.
+- With that second account's fresh ID token set privately as `LINE_ID_TOKEN`,
+  run `npm run test:smoke:reporter-isolation -- tkt_f0be93a07f6e43e8286e06189d`.
+  The script checks that the ticket exists and that this LINE user is not
+  associated with it before asserting HTTP 404 for detail and absence from
+  the reporter list. Do not record or share the token.
 - Seed Teams records and the other shared team accounts when their names and
   notification email addresses are agreed.
-- The notification worker is not enabled. Replace the placeholder LINE
-  Messaging API token, verify the SES sender and permitted recipients, seed
-  team work-order email addresses, then test a newly inserted audit event of
-  kind `TRIAGED`.
+- Use a team-owned sender domain, verify it as an SES identity in Singapore,
+  publish its Easy DKIM DNS records, and send from an address on that domain
+  to achieve DKIM alignment. Recheck SPF, DKIM, DMARC and Inbox placement on
+  a fresh work-order message. The current verified `@gmail.com` address sent
+  through SES fails DMARC alignment. No project-owned domain identity or DKIM
+  configuration has been deployed; Gmail's full spam-classification reason is
+  still unknown.
+- The backend PR for the remaining API routes, manager MFA and SLA sweep is
+  not yet deployed. It requires an `AccountEvents` table, an MFA encryption
+  secret, additional routes and IAM, and a scheduled sweep Lambda before live
+  tests. Manager login smoke tests must be updated for the MFA flow.
 - The LIFF frontend still needs to call the live upload and ticket endpoints
   instead of its stub submit action.
 - ECS/ECR/ALB for the staff portal remains a proposed course-bonus option,

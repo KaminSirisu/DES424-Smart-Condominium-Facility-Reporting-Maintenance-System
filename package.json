@@ -26,6 +26,8 @@
     "test:smoke:staff-ticket-read": "node tests/smoke/staff-ticket-read.mjs",
     "test:smoke:staff-ticket-status": "node tests/smoke/staff-ticket-status.mjs",
     "test:smoke:staff-completed-list": "node tests/smoke/staff-completed-list.mjs",
+    "test:smoke:cross-team-detail": "node tests/smoke/cross-team-detail.mjs",
+    "test:smoke:reporter-isolation": "node tests/smoke/reporter-isolation.mjs",
     "build": "npm run build --workspaces",
     "infra:typecheck": "tsc -p infrastructure/aws/tsconfig.json --noEmit",
     "infra:synth": "cd infrastructure/aws && cdk synth",
