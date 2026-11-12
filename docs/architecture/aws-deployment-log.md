@@ -186,9 +186,12 @@ mailbox also arrived in Spam, so the missing Inbox message was not a missing
 team record or failed notification trigger. The sender
 `manager.des424@gmail.com` and recipient `tech.plumber.des424@gmail.com` were
 verified SES identities in Singapore. SES was still in sandbox mode. The
-sender email identity reported DKIM `NOT_STARTED`; the Gmail message's SPF,
-DKIM and DMARC results have not yet been checked. No token or email password
-is recorded here.
+sender email identity reported DKIM `NOT_STARTED`. In Gmail's "Show original"
+for the work-order email, SPF was `PASS`, DKIM was `PASS` for
+`amazonses.com`, and DMARC was `FAIL`. The authenticated SES domains therefore
+did not align with the `@gmail.com` From domain. This is a deliverability
+problem, although Gmail's complete spam-classification reason is unknown. No
+token or email password is recorded here.
 
 On 2026-11-12, after the PLUMBING technician's password was rotated privately,
 the live status/proof smoke test was rerun against that ticket:
@@ -210,11 +213,13 @@ password, staff token and LINE channel access token were not recorded.
   and test the remaining staff write routes and reporter reopen.
 - Seed Teams records and the other shared team accounts when their names and
   notification email addresses are agreed.
-- Inspect the received work-order email's Gmail "Show original" authentication
-  results and spam explanation before changing the SES sender setup. The
-  current verified Gmail-address sender through SES reached the mailbox but
-  was filtered to Spam. No domain identity or DKIM configuration has been
-  deployed for a project-owned sender domain.
+- Use a team-owned sender domain, verify it as an SES identity in Singapore,
+  publish its Easy DKIM DNS records, and send from an address on that domain
+  to achieve DKIM alignment. Recheck SPF, DKIM, DMARC and Inbox placement on
+  a fresh work-order message. The current verified `@gmail.com` address sent
+  through SES fails DMARC alignment. No project-owned domain identity or DKIM
+  configuration has been deployed; Gmail's full spam-classification reason is
+  still unknown.
 - The backend PR for the remaining API routes, manager MFA and SLA sweep is
   not yet deployed. It requires an `AccountEvents` table, an MFA encryption
   secret, additional routes and IAM, and a scheduled sweep Lambda before live
