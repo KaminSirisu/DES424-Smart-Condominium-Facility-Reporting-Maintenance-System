@@ -212,14 +212,23 @@ reported an assignment LINE message and a team work-order email. The first
 cross-team access script run passed with the literal placeholder
 `NEW_ELECTRICAL_TICKET_ID`, so its 404 checked a nonexistent ticket and is **not
 valid authorization evidence**. The script now checks DynamoDB for the actual
-other-team ticket before making the API access assertions. Rerun it with the
-real ID before claiming that cross-team detail access passed.
+other-team ticket before making the API access assertions. With the real ID
+and the PLUMBING technician account, the corrected live smoke test returned:
+
+```text
+Cross-team access passed: own tkt_f0be93a07f6e43e8286e06189d visible; ELECTRICAL ticket tkt_68acac20ba6835175fd47c95a4 hidden.
+```
+
+The script confirmed the ELECTRICAL ticket existed and belonged to that team,
+then checked HTTP 200 for the PLUMBING ticket, HTTP 404 for the ELECTRICAL
+ticket detail, and HTTP 403 for an ELECTRICAL team list request. No staff
+password or token was recorded. The AWS SDK printed a Node 20 support warning
+in CloudShell; the test still completed successfully.
 
 ## Next deployment gates
 
-- Rerun the cross-team ticket-detail check with the real ELECTRICAL ticket ID
-  above. A different-reporter denial check needs a second LINE account. Deploy
-  and test the remaining staff write routes and reporter reopen.
+- A different-reporter denial check needs a second LINE account. Deploy and
+  test the remaining staff write routes and reporter reopen.
 - Seed Teams records and the other shared team accounts when their names and
   notification email addresses are agreed.
 - Use a team-owned sender domain, verify it as an SES identity in Singapore,
