@@ -12,9 +12,15 @@ needs `CreatedMonthIndex` access; both permissions are included.
 Preserve every context flag already used in the deployed stack when running
 `infra:diff` and `infra:deploy`. Add `enableExtendedApi=true` only after the
 backend PR is merged or checked out with this IaC. Review the diff before
-deployment. The existing manager login smoke script expects a direct session
-and must be updated for MFA enrollment and verification. The frontend must
-also implement the manager MFA screens.
+deployment. The frontend must also implement the manager MFA screens.
+
+Use `npm run test:smoke:manager-mfa` in an interactive CloudShell session after
+deployment, with `STAFF_EMAIL` and `STAFF_PASSWORD` set privately. On first
+login it prints the one-time setup key for an authenticator app, then accepts
+a hidden six-digit code. It checks the manager profile, dashboard summary,
+staff-account list, and manual triage queue without printing the session token.
+Keep the setup key out of shared logs and screenshots. The older
+`test:smoke:staff-auth` script still tests a technician's direct login.
 
 The five-minute SLA worker is a **separate** `-c enableSlaSweep=true` flag.
 Enable it after reviewing existing open tickets: its first run can create
@@ -22,13 +28,21 @@ alerts for tickets that already crossed an SLA threshold. The notification
 worker now reads active manager accounts for supervisor email. SES sandbox
 recipients still need verified email identities.
 
+After the extended routes are deployed, a reporter with a fresh LINE ID token
+can exercise reopen on a disposable ticket completed within the last seven
+days: `npm run test:smoke:reporter-reopen -- <done-ticket-id>`. The script
+checks that the same reporter can still read the ticket and that a retry with
+the same idempotency key does not increase the repair cycle twice. It changes
+the ticket back to `ASSIGNED`, so do not use a real closed work order.
+
 The CDK stack and its CloudFormation asset-bucket template target only AWS account `528301714999` in `ap-southeast-1`. The foundation was deployed on 2026-11-07 from `infrastructure/scfrms-dev-stack`. Run commands from the repository root.
 
 The development stack now serves health, reporter intake, AI triage, staff
 login, staff ticket reads, and technician status updates. A real ticket was
 created, triaged, and moved through `IN_PROGRESS` to `DONE` on 2026-11-09. See
 the [AWS deployment and smoke-test log](../../docs/architecture/aws-deployment-log.md)
-for the observed result and deployment context. Notifications are not enabled yet.
+for the observed result and deployment context. Notifications are enabled in
+the G02 stack and have delivered LINE messages and a team email in live tests.
 
 This is the current Lambda-based development stack. The original [ECR/ECS/Fargate architecture](../../docs/architecture/deployment-topology.md) is a valid alternative for the backend API, but would replace the API Lambda deployment rather than be added on top of it without a routing decision.
 
