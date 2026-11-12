@@ -49,12 +49,11 @@ describe('applyClassification', () => {
 
     expect(applyTriage).toHaveBeenCalledWith('tkt_1', 1, {
       category: 'PLUMBING',
-      suggestedPriority: 'CRITICAL',
       priority: 'CRITICAL',
       teamId: 'PLUMBING',
-      // 4h SLA counted from created_at, not from the triage time
-      deadlineAt: '2026-10-28T14:00:00.000Z',
-      slaPolicyVersion: 1,
+      // 3h SLA counted from created_at, not from the triage time
+      deadlineAt: '2026-10-28T13:00:00.000Z',
+      slaPolicyVersion: 2,
       now: '2026-10-28T10:30:00.000Z',
     });
   });
@@ -163,11 +162,10 @@ describe('applyClassification', () => {
         'tkt_1',
         1,
         expect.objectContaining({
-          suggestedPriority: 'LOW',
           priority: 'CRITICAL',
           safetyHazard: 'GAS',
-          // 4h CRITICAL deadline from created_at, not the 120h LOW one
-          deadlineAt: '2026-10-28T14:00:00.000Z',
+          // 3h CRITICAL deadline from created_at, not the 48h LOW one
+          deadlineAt: '2026-10-28T13:00:00.000Z',
         }),
       );
     });

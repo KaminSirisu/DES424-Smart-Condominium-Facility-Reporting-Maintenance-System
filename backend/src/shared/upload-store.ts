@@ -31,12 +31,12 @@ const uploadSigner = new S3Client({
   requestChecksumCalculation: 'WHEN_REQUIRED',
 });
 
-/** SR-20: JPEG, PNG or WebP, 10 MB at most. */
-export const UPLOAD_CONTENT_TYPES = [
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-] as const;
+/**
+ * JPEG or PNG, 10 MiB at most. SR-20 also lists WebP, but Rekognition and LINE
+ * read only JPEG and PNG, so the upload takes only what works all the way
+ * through (the LIFF form accepts the same).
+ */
+export const UPLOAD_CONTENT_TYPES = ['image/jpeg', 'image/png'] as const;
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 /** SR-19: an upload URL expires within 5 minutes. */
 export const UPLOAD_URL_TTL_SECONDS = 5 * 60;
@@ -134,15 +134,16 @@ export async function uploadExists(
   }
 }
 
-export type ImageType = 'jpeg' | 'png' | 'webp';
+export type ImageType = 'jpeg' | 'png';
 
-/** How many bytes it takes to tell JPEG, PNG and WebP apart. */
-const SIGNATURE_BYTES = 12;
+/** How many bytes it takes to tell JPEG and PNG apart (the PNG signature). */
+const SIGNATURE_BYTES = 8;
 
 /**
  * The image type a file really is, judged by its first bytes, or null. A file
  * name or a content type can be anything the uploader says; the bytes cannot
- * (SR-20 allows JPEG, PNG and WebP; SR-21 asks for this check).
+ * (SR-21 asks for this check; only JPEG and PNG are accepted, see
+ * UPLOAD_CONTENT_TYPES).
  */
 export function detectImageType(bytes: Uint8Array): ImageType | null {
   const startsWith = (offset: number, values: number[]) =>
@@ -155,14 +156,6 @@ export function detectImageType(bytes: Uint8Array): ImageType | null {
   ) {
     return 'png';
   }
-  // WebP: "RIFF", four size bytes, then "WEBP"
-  if (
-    bytes.length >= SIGNATURE_BYTES &&
-    startsWith(0, [0x52, 0x49, 0x46, 0x46]) &&
-    startsWith(8, [0x57, 0x45, 0x42, 0x50])
-  ) {
-    return 'webp';
-  }
   return null;
 }
 
@@ -174,7 +167,7 @@ function totalSize(contentRange: string | undefined): number | null {
 
 /**
  * True if the upload exists, is within the size limit and its first bytes are
- * a JPEG, PNG or WebP. Reads only the first bytes of the object.
+ * a JPEG or PNG. Reads only the first bytes of the object.
  */
 export async function uploadIsImage(
   purpose: PhotoPurpose,

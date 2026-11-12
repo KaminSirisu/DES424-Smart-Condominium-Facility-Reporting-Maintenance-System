@@ -10,6 +10,12 @@ import {
   isTeamId,
   priorityFor,
   resolutionHours,
+  responseMinutes,
+  SLA_POLICY_VERSION,
+  SLA_REPEAT_MINUTES,
+  SLA_WARNING_SHARE,
+  slaStartOf,
+  TRIAGE_DELAY_MINUTES,
 } from '../../backend/src/triage/policy';
 
 describe('triage policy', () => {
@@ -28,18 +34,43 @@ describe('triage policy', () => {
   });
 
   it('gives each priority its default resolution time', () => {
-    expect(resolutionHours('PLUMBING', 'CRITICAL')).toBe(4);
-    expect(resolutionHours('PLUMBING', 'MEDIUM')).toBe(24);
-    expect(resolutionHours('PLUMBING', 'LOW')).toBe(120);
+    expect(resolutionHours('PLUMBING', 'CRITICAL')).toBe(3);
+    expect(resolutionHours('PLUMBING', 'MEDIUM')).toBe(12);
+    expect(resolutionHours('PLUMBING', 'LOW')).toBe(48);
+  });
+
+  it('gives each priority its response target and the SLA constants', () => {
+    expect(responseMinutes('CRITICAL')).toBe(15);
+    expect(responseMinutes('MEDIUM')).toBe(120);
+    expect(responseMinutes('LOW')).toBe(1440);
+    expect(SLA_WARNING_SHARE).toBe(0.75);
+    expect(SLA_REPEAT_MINUTES).toBe(60);
+    expect(TRIAGE_DELAY_MINUTES).toBe(5);
+    expect(SLA_POLICY_VERSION).toBe(2);
   });
 
   it('counts the deadline from ticket creation', () => {
     expect(
       computeDeadline('2026-10-28T10:00:00.000Z', 'ELECTRICAL', 'CRITICAL'),
-    ).toBe('2026-10-28T14:00:00.000Z');
+    ).toBe('2026-10-28T13:00:00.000Z');
     expect(computeDeadline('2026-10-28T10:00:00.000Z', 'HVAC', 'LOW')).toBe(
-      '2026-11-02T10:00:00.000Z',
+      '2026-10-30T10:00:00.000Z',
     );
+    expect(computeDeadline('2026-10-28T10:00:00.000Z', 'HVAC', 'MEDIUM')).toBe(
+      '2026-10-28T22:00:00.000Z',
+    );
+  });
+
+  it('starts the SLA clock at creation, or at the earlier start a merge took over', () => {
+    expect(slaStartOf({ createdAt: '2026-10-28T10:00:00.000Z' })).toBe(
+      '2026-10-28T10:00:00.000Z',
+    );
+    expect(
+      slaStartOf({
+        createdAt: '2026-10-28T10:00:00.000Z',
+        slaStartAt: '2026-10-28T08:00:00.000Z',
+      }),
+    ).toBe('2026-10-28T08:00:00.000Z');
   });
 
   it('maps every category to a known team', () => {

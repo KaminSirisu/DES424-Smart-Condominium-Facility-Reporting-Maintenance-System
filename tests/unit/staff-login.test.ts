@@ -13,6 +13,9 @@ vi.mock('../../backend/src/shared/accounts', async (importOriginal) => ({
 }));
 
 vi.mock('../../backend/src/shared/teams', () => ({ getTeamName: vi.fn() }));
+vi.mock('../../backend/src/shared/rate-limit', () => ({
+  consumeLoginIpQuota: vi.fn(),
+}));
 
 import { handler } from '../../backend/src/auth/staff-login';
 import {
@@ -20,6 +23,8 @@ import {
   recordFailedLogin,
   recordSuccessfulLogin,
 } from '../../backend/src/shared/accounts';
+import { consumeLoginIpQuota } from '../../backend/src/shared/rate-limit';
+import { verifyMfaChallenge } from '../../backend/src/shared/mfa-challenge';
 import { verifyStaffToken } from '../../backend/src/shared/staff-token';
 import { getTeamName } from '../../backend/src/shared/teams';
 
@@ -84,6 +89,7 @@ describe('POST /auth/staff/login', () => {
     getAccount.mockResolvedValue(technician);
     failedLogin.mockResolvedValue({ locked: false });
     successfulLogin.mockResolvedValue(undefined);
+    vi.mocked(consumeLoginIpQuota).mockResolvedValue({ allowed: true });
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -122,7 +128,8 @@ describe('POST /auth/staff/login', () => {
       expect(bodyOf(result).staff).not.toHaveProperty('teamName');
     });
 
-    it('returns a manager without a team', async () => {
+    it('returns a manager without a team while MFA is switched off', async () => {
+      vi.stubEnv('MANAGER_MFA_REQUIRED', 'false');
       getAccount.mockResolvedValue(manager);
 
       const body = bodyOf(await login('manager@example.com'));
@@ -166,6 +173,149 @@ describe('POST /auth/staff/login', () => {
       const result = await handler(event(undefined, raw, true));
 
       expect(result.statusCode).toBe(200);
+    });
+  });
+
+  describe('a manager login (MFA required)', () => {
+    const enrolled: AccountRecord = {
+      ...manager,
+      mfaSecret: 'v1.a.b.c',
+      mfaEnrolledAt: '2026-11-02T00:00:00.000Z',
+    };
+
+    it('answers a challenge, not a session, and says whether MFA is set up', async () => {
+      getAccount.mockResolvedValue(manager);
+      const first = await login('manager@example.com');
+      const firstBody = bodyOf(first);
+      expect(first.statusCode).toBe(200);
+      expect(firstBody).toEqual({
+        mfaRequired: true,
+        mfaEnrolled: false,
+        challengeToken: expect.any(String),
+        expiresInSeconds: 300,
+      });
+
+      getAccount.mockResolvedValue(enrolled);
+      expect(bodyOf(await login('manager@example.com')).mfaEnrolled).toBe(true);
+    });
+
+    it('gives a challenge for this account and version that is not a staff token', async () => {
+      getAccount.mockResolvedValue({ ...enrolled, tokenVersion: 7 });
+      const body = bodyOf(await login('manager@example.com'));
+
+      expect(verifyMfaChallenge(body.challengeToken)).toEqual({
+        accountId: 'manager@example.com',
+        tokenVersion: 7,
+      });
+      expect(() => verifyStaffToken(body.challengeToken)).toThrow();
+      expect(body).not.toHaveProperty('accessToken');
+      expect(body).not.toHaveProperty('staff');
+    });
+
+    it('does not clear the failure count yet, and is not cached', async () => {
+      getAccount.mockResolvedValue(enrolled);
+      const result = await login('manager@example.com');
+
+      expect(successfulLogin).not.toHaveBeenCalled();
+      expect(failedLogin).not.toHaveBeenCalled();
+      expect(result.headers?.['cache-control']).toBe('no-store');
+    });
+
+    it('still counts a wrong password and refuses a locked or disabled manager', async () => {
+      getAccount.mockResolvedValue(enrolled);
+      expect(
+        (await login('manager@example.com', 'nope-nope-nope')).statusCode,
+      ).toBe(401);
+      expect(failedLogin).toHaveBeenCalledTimes(1);
+
+      getAccount.mockResolvedValue({
+        ...enrolled,
+        lockedUntil: new Date(Date.now() + 60_000).toISOString(),
+      });
+      expect((await login('manager@example.com')).statusCode).toBe(429);
+
+      getAccount.mockResolvedValue({ ...enrolled, isActive: false });
+      expect((await login('manager@example.com')).statusCode).toBe(401);
+    });
+
+    it('does not change a technician login', async () => {
+      const body = bodyOf(await login());
+      expect(body.accessToken).toEqual(expect.any(String));
+      expect(body).not.toHaveProperty('mfaRequired');
+      expect(successfulLogin).toHaveBeenCalled();
+    });
+  });
+
+  describe('the limit per address (SR-09)', () => {
+    const fromIp = (ip: string | undefined, raw?: string) => {
+      const base = raw
+        ? event(undefined, raw)
+        : event({ email: 'plumbing@example.com', password: PASSWORD });
+      (base.requestContext as { http: Record<string, unknown> }).http = {
+        method: 'POST',
+        ...(ip ? { sourceIp: ip } : {}),
+      };
+      return handler(base);
+    };
+
+    it('counts the attempt for the address API Gateway saw, and lets it through', async () => {
+      const result = await fromIp('203.0.113.7');
+
+      expect(result.statusCode).toBe(200);
+      expect(consumeLoginIpQuota).toHaveBeenCalledOnce();
+      expect(consumeLoginIpQuota).toHaveBeenCalledWith(
+        '203.0.113.7',
+        expect.any(Date),
+      );
+    });
+
+    it('answers 429 with Retry-After once the address is out of attempts, before anything else is looked at', async () => {
+      vi.mocked(consumeLoginIpQuota).mockResolvedValue({
+        allowed: false,
+        retryAfterSeconds: 421,
+      });
+
+      const result = await fromIp('203.0.113.7');
+
+      expect(result.statusCode).toBe(429);
+      expect(result.headers?.['Retry-After']).toBe('421');
+      expect(bodyOf(result).error).toMatchObject({
+        code: 'RATE_LIMITED',
+        requestId: 'req-1',
+      });
+      expect(getAccount).not.toHaveBeenCalled();
+      expect(failedLogin).not.toHaveBeenCalled();
+      expect(successfulLogin).not.toHaveBeenCalled();
+    });
+
+    it('counts an attempt whose body cannot be read, and a wrong password', async () => {
+      expect((await fromIp('203.0.113.7', '{nope')).statusCode).toBe(400);
+      expect(consumeLoginIpQuota).toHaveBeenCalledTimes(1);
+
+      getAccount.mockResolvedValue(technician);
+      const wrong = event({
+        email: 'plumbing@example.com',
+        password: 'x'.repeat(14),
+      });
+      (wrong.requestContext as { http: Record<string, unknown> }).http = {
+        method: 'POST',
+        sourceIp: '203.0.113.7',
+      };
+      expect((await handler(wrong)).statusCode).toBe(401);
+      expect(consumeLoginIpQuota).toHaveBeenCalledTimes(2);
+    });
+
+    it('counts nothing when the event has no address', async () => {
+      const result = await fromIp(undefined);
+      expect(result.statusCode).toBe(200);
+      expect(consumeLoginIpQuota).not.toHaveBeenCalled();
+    });
+
+    it('answers 500, and never lets the login through, when the counter cannot be written', async () => {
+      vi.mocked(consumeLoginIpQuota).mockRejectedValue(new Error('throttled'));
+      const result = await fromIp('203.0.113.7');
+      expect(result.statusCode).toBe(500);
+      expect(getAccount).not.toHaveBeenCalled();
     });
   });
 

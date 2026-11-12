@@ -19,7 +19,6 @@ const ticket: TicketRecord = {
   version: 4,
   reporterLineUserId: 'Uabc123',
   category: 'PLUMBING',
-  suggestedPriority: 'MEDIUM',
   priority: 'CRITICAL',
   prioritySetBy: 'AI',
   safetyHazard: 'GAS',
@@ -38,7 +37,6 @@ describe('toTicketView', () => {
       status: 'IN_PROGRESS',
       repairCycle: 1,
       category: 'PLUMBING',
-      suggestedPriority: 'MEDIUM',
       priority: 'CRITICAL',
       prioritySetBy: 'AI',
       teamId: 'PLUMBING',
@@ -56,6 +54,12 @@ describe('toTicketView', () => {
     for (const field of ['reporterLineUserId', 'version', 'safetyHazard']) {
       expect(view).not.toHaveProperty(field);
     }
+    // An earlier version stored the matrix priority on the ticket; it is
+    // never returned, only `priority` and `prioritySetBy` are.
+    const older = { ...ticket, suggestedPriority: 'LOW' } as TicketRecord;
+    expect(toTicketView(older)).not.toHaveProperty('suggestedPriority');
+    expect(view).toHaveProperty('priority', 'CRITICAL');
+    expect(view).toHaveProperty('prioritySetBy', 'AI');
     expect(JSON.stringify(view)).not.toContain('Uabc123');
     expect(JSON.stringify(view)).not.toContain('uploads/');
     expect(JSON.stringify(view)).not.toContain('s3ObjectKey');

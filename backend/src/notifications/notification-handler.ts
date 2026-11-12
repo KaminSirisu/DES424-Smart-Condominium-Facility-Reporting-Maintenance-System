@@ -7,6 +7,8 @@ import { getTicket } from '../shared/ticket-repository.js';
 import type { NotificationChannel, NotificationEvent } from './channel.js';
 import { lineReporterChannel } from './line-notification.js';
 import { hasSent, markSent } from './notification-log.js';
+import { emailSupervisorsChannel } from './sla-breach-notification.js';
+import { emailTeamWarningChannel } from './sla-warning-notification.js';
 import { sendWorkOrderEmail } from './work-order-email.js';
 
 /**
@@ -25,6 +27,14 @@ import { sendWorkOrderEmail } from './work-order-email.js';
  * record; recipients that already got their message are skipped on the retry.
  * Needs ReportBatchItemFailures on the event source mapping.
  *
+ * The channels are independent. A failing channel, or a failing recipient,
+ * never stops the others from being tried for the same event: everything that
+ * can be sent is sent, and only then is the failure reported for the retry.
+ * So the work order email (SES) cannot hold back a LINE message. The
+ * NOTIFICATION_CHANNELS environment variable, a comma separated list of
+ * channel names, limits what a deployment runs, for example only LINE_REPORTER
+ * while SES is not set up; unset means all channels.
+ *
  * Logs name the channel only, never the recipient: a recipient can be a LINE
  * user id, which must stay out of logs (SR-35).
  */
@@ -39,7 +49,33 @@ const emailTeamChannel: NotificationChannel = {
 export const CHANNELS: readonly NotificationChannel[] = [
   emailTeamChannel,
   lineReporterChannel,
+  emailSupervisorsChannel,
+  emailTeamWarningChannel,
 ];
+
+/**
+ * The channels this deployment runs: those named in NOTIFICATION_CHANNELS, or
+ * all of them when it is unset or empty. A name that matches no channel is an
+ * error, because a typo would otherwise silently send nothing.
+ */
+export function selectChannels(
+  setting: string | undefined = process.env.NOTIFICATION_CHANNELS,
+): readonly NotificationChannel[] {
+  const names = (setting ?? '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter((name) => name !== '');
+  if (names.length === 0) return CHANNELS;
+
+  const unknown = names.filter((n) => !CHANNELS.some((c) => c.name === n));
+  if (unknown.length > 0) {
+    throw new Error(
+      `NOTIFICATION_CHANNELS names an unknown channel: ${unknown.join(', ')}. ` +
+        `Known channels: ${CHANNELS.map((c) => c.name).join(', ')}.`,
+    );
+  }
+  return CHANNELS.filter((c) => names.includes(c.name));
+}
 
 /** The audit event of a newly inserted TicketEvents item, or null for any other record. */
 function newAuditEvent(record: DynamoDBRecord): NotificationEvent | null {
@@ -63,7 +99,7 @@ function newAuditEvent(record: DynamoDBRecord): NotificationEvent | null {
 }
 
 async function notify(event: NotificationEvent): Promise<void> {
-  const channels = CHANNELS.filter((c) => c.kinds.includes(event.kind));
+  const channels = selectChannels().filter((c) => c.kinds.includes(event.kind));
   if (channels.length === 0) return;
 
   const ticket = await getTicket(event.ticketId);
@@ -72,26 +108,53 @@ async function notify(event: NotificationEvent): Promise<void> {
     return;
   }
 
-  for (const channel of channels) {
-    for (const recipient of await channel.recipients(ticket)) {
-      const logKey = `${channel.name}:${recipient}`;
-      if (await hasSent(event.ticketId, event.eventId, logKey)) continue;
+  // One failure must not hold back the rest: collect it, carry on, and throw
+  // the first one at the end so the record is retried. What was sent is in the
+  // notification log, so the retry skips it.
+  const failures: unknown[] = [];
+  const failed = (channel: NotificationChannel, err: unknown) => {
+    failures.push(err);
+    console.error('Notification channel failed', {
+      ticketId: event.ticketId,
+      eventId: event.eventId,
+      channel: channel.name,
+      err,
+    });
+  };
 
-      if (await channel.send(ticket, recipient, event)) {
-        await markSent(
-          event.ticketId,
-          event.eventId,
-          logKey,
-          new Date().toISOString(),
-        );
-        console.info('Notification sent', {
-          ticketId: event.ticketId,
-          eventId: event.eventId,
-          channel: channel.name,
-        });
+  for (const channel of channels) {
+    let recipients: string[];
+    try {
+      recipients = await channel.recipients(ticket);
+    } catch (err) {
+      failed(channel, err);
+      continue;
+    }
+
+    for (const recipient of recipients) {
+      try {
+        const logKey = `${channel.name}:${recipient}`;
+        if (await hasSent(event.ticketId, event.eventId, logKey)) continue;
+
+        if (await channel.send(ticket, recipient, event)) {
+          await markSent(
+            event.ticketId,
+            event.eventId,
+            logKey,
+            new Date().toISOString(),
+          );
+          console.info('Notification sent', {
+            ticketId: event.ticketId,
+            eventId: event.eventId,
+            channel: channel.name,
+          });
+        }
+      } catch (err) {
+        failed(channel, err);
       }
     }
   }
+  if (failures.length > 0) throw failures[0];
 }
 
 export async function handler(

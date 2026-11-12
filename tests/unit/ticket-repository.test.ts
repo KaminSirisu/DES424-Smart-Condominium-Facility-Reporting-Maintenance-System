@@ -6,10 +6,15 @@ vi.mock('../../backend/src/shared/dynamodb-client.js', () => ({
 
 import { ddb } from '../../backend/src/shared/dynamodb-client.js';
 import {
+  QuotaExceededError,
   applyTriage,
   createTicket,
   getTicket,
 } from '../../backend/src/shared/ticket-repository.js';
+import {
+  ticketIpQuotaClaim,
+  ticketQuotaClaim,
+} from '../../backend/src/shared/rate-limit.js';
 import type { TriageUpdate } from '../../backend/src/shared/ticket-repository.js';
 import type { TicketRecord } from '../../backend/src/tickets/types.js';
 
@@ -20,6 +25,7 @@ const TABLES = {
   TICKET_REPORTERS_TABLE_NAME: 'TestReporters',
   TICKET_PHOTOS_TABLE_NAME: 'TestPhotos',
   TICKET_EVENTS_TABLE_NAME: 'TestEvents',
+  RATE_LIMITS_TABLE_NAME: 'TestRateLimits',
 };
 
 interface SentItem {
@@ -141,6 +147,204 @@ describe('createTicket', () => {
     expect(photoIds).toEqual(['upl_1', 'upl_2']);
   });
 
+  describe('with a quota claim (SR-31)', () => {
+    const claim = () =>
+      ticketQuotaClaim('Uabc123', new Date('2026-10-28T10:30:00Z'));
+    const cancelled = (codes: string[]) =>
+      Object.assign(new Error('cancelled'), {
+        name: 'TransactionCanceledException',
+        CancellationReasons: codes.map((Code) => ({ Code })),
+      });
+
+    it('counts the creation in the same transaction, after everything else', async () => {
+      await createTicket(record(), claim());
+
+      expect(send).toHaveBeenCalledOnce();
+      const items = transactItems();
+      expect(items).toHaveLength(5);
+      // the ticket is still first, so a duplicate is still reported at index 0
+      expect(items[0].Put?.TableName).toBe('TestTickets');
+      const last = items[4] as { Update?: SentItem };
+      expect(last.Update?.TableName).toBe('TestRateLimits');
+      expect(last.Update?.Key).toEqual({
+        limitKey: 'TICKET_CREATE#Uabc123',
+        windowStart: 1793181600,
+      });
+    });
+
+    it('counts a list of claims, the reporter and the address, in that order', async () => {
+      const ipClaim = ticketIpQuotaClaim(
+        '203.0.113.7',
+        new Date('2026-10-28T10:30:00Z'),
+      );
+      await createTicket(record(), [claim(), ipClaim]);
+
+      const items = transactItems();
+      expect(items).toHaveLength(6);
+      expect((items[4] as { Update?: SentItem }).Update?.Key).toEqual({
+        limitKey: 'TICKET_CREATE#Uabc123',
+        windowStart: 1793181600,
+      });
+      expect((items[5] as { Update?: SentItem }).Update?.Key).toEqual({
+        limitKey: 'TICKET_CREATE_IP#203.0.113.7',
+        windowStart: 1793181600,
+      });
+    });
+
+    it('writes no counter for an empty list', async () => {
+      await createTicket(record(), []);
+      expect(transactItems()).toHaveLength(4);
+    });
+
+    describe('when either of two counters refuses', () => {
+      const earlier = () =>
+        ticketQuotaClaim('Uabc123', new Date('2026-10-28T10:50:00Z')); // 600 s left
+      const later = () =>
+        ticketIpQuotaClaim('203.0.113.7', new Date('2026-10-28T10:10:00Z')); // 3000 s left
+
+      it('says how long until the reporter counter resets when only it refuses', async () => {
+        send.mockRejectedValue(
+          cancelled([
+            'None',
+            'None',
+            'None',
+            'None',
+            'ConditionalCheckFailed',
+            'None',
+          ]),
+        );
+        await expect(
+          createTicket(record(), [earlier(), later()]),
+        ).rejects.toMatchObject({
+          name: 'QuotaExceededError',
+          retryAfterSeconds: 600,
+        });
+      });
+
+      it('says how long until the address counter resets when only it refuses', async () => {
+        send.mockRejectedValue(
+          cancelled([
+            'None',
+            'None',
+            'None',
+            'None',
+            'None',
+            'ConditionalCheckFailed',
+          ]),
+        );
+        await expect(
+          createTicket(record(), [earlier(), later()]),
+        ).rejects.toMatchObject({
+          name: 'QuotaExceededError',
+          retryAfterSeconds: 3000,
+        });
+      });
+
+      it('waits for the longer one when both refuse', async () => {
+        send.mockRejectedValue(
+          cancelled([
+            'None',
+            'None',
+            'None',
+            'None',
+            'ConditionalCheckFailed',
+            'ConditionalCheckFailed',
+          ]),
+        );
+        await expect(
+          createTicket(record(), [earlier(), later()]),
+        ).rejects.toMatchObject({ retryAfterSeconds: 3000 });
+      });
+
+      it('rethrows the duplicate-ticket failure when the ticket already exists', async () => {
+        const duplicate = cancelled([
+          'ConditionalCheckFailed',
+          'None',
+          'None',
+          'None',
+          'ConditionalCheckFailed',
+          'ConditionalCheckFailed',
+        ]);
+        send.mockRejectedValue(duplicate);
+        await expect(createTicket(record(), [earlier(), later()])).rejects.toBe(
+          duplicate,
+        );
+      });
+
+      it('rethrows a failure that is not a refused counter', async () => {
+        const other = cancelled([
+          'None',
+          'None',
+          'None',
+          'None',
+          'None',
+          'ThrottlingError',
+        ]);
+        send.mockRejectedValue(other);
+        await expect(createTicket(record(), [earlier(), later()])).rejects.toBe(
+          other,
+        );
+      });
+    });
+
+    it('writes no counter without a claim', async () => {
+      await createTicket(record());
+      expect(transactItems()).toHaveLength(4);
+    });
+
+    it('throws QuotaExceededError with the Retry-After when only the counter refuses', async () => {
+      send.mockRejectedValue(
+        cancelled(['None', 'None', 'None', 'None', 'ConditionalCheckFailed']),
+      );
+
+      await expect(createTicket(record(), claim())).rejects.toMatchObject({
+        name: 'QuotaExceededError',
+        retryAfterSeconds: 1800,
+      });
+      await expect(createTicket(record(), claim())).rejects.toBeInstanceOf(
+        QuotaExceededError,
+      );
+    });
+
+    it('rethrows the duplicate-ticket failure when the ticket already exists, even if the counter also refuses', async () => {
+      const duplicate = cancelled([
+        'ConditionalCheckFailed',
+        'None',
+        'None',
+        'None',
+        'ConditionalCheckFailed',
+      ]);
+      send.mockRejectedValue(duplicate);
+
+      await expect(createTicket(record(), claim())).rejects.toBe(duplicate);
+    });
+
+    it('rethrows any other failure, and a refusal when no claim was made', async () => {
+      const other = cancelled([
+        'None',
+        'None',
+        'None',
+        'None',
+        'ThrottlingError',
+      ]);
+      send.mockRejectedValue(other);
+      await expect(createTicket(record(), claim())).rejects.toBe(other);
+
+      const refused = cancelled([
+        'None',
+        'None',
+        'None',
+        'ConditionalCheckFailed',
+      ]);
+      send.mockRejectedValue(refused);
+      await expect(createTicket(record())).rejects.toBe(refused);
+
+      const plain = new Error('network');
+      send.mockRejectedValue(plain);
+      await expect(createTicket(record(), claim())).rejects.toBe(plain);
+    });
+  });
+
   it('fails clearly when a table name is not configured', async () => {
     vi.stubEnv('TICKET_PHOTOS_TABLE_NAME', '');
     await expect(createTicket(record())).rejects.toThrow(
@@ -258,7 +462,6 @@ describe('getTicket', () => {
 describe('applyTriage', () => {
   const update: TriageUpdate = {
     category: 'PLUMBING',
-    suggestedPriority: 'MEDIUM',
     priority: 'MEDIUM',
     teamId: 'PLUMBING',
     deadlineAt: '2026-10-29T10:00:00.000Z',
@@ -284,6 +487,11 @@ describe('applyTriage', () => {
     expect(ticketUpdate.Update?.UpdateExpression).toContain(
       'prioritySetBy = :prioritySetBy',
     );
+    // The matrix result is not kept next to the priority any more.
+    expect(ticketUpdate.Update?.UpdateExpression).not.toContain('suggested');
+    expect(
+      JSON.stringify(ticketUpdate.Update?.ExpressionAttributeValues),
+    ).not.toContain(':suggested');
     expect(eventPut.Put?.TableName).toBe('TestEvents');
     expect(eventPut.Put?.Item).toMatchObject({
       ticketId: 'tkt_1',
@@ -291,6 +499,56 @@ describe('applyTriage', () => {
       kind: 'TRIAGED',
       toPriority: 'MEDIUM',
     });
+  });
+
+  it('records the automatic triage as the system, with no manager', async () => {
+    await applyTriage('tkt_1', 3, update);
+
+    const [ticketUpdate, eventPut] = transactItems();
+    expect(eventPut.Put?.Item).toMatchObject({ actorType: 'SYSTEM' });
+    expect(eventPut.Put?.Item).not.toHaveProperty('actorStaffId');
+    expect(ticketUpdate.Update?.ExpressionAttributeValues).toMatchObject({
+      ':prioritySetBy': 'AI',
+    });
+  });
+
+  it('records a triage by hand as the manager who did it, with the reason', async () => {
+    await applyTriage('tkt_1', 3, {
+      ...update,
+      staff: { accountId: 'manager@example.com', reason: 'Lift and lights' },
+    });
+
+    const [ticketUpdate, eventPut] = transactItems();
+    expect(ticketUpdate.Update?.ExpressionAttributeValues).toMatchObject({
+      ':prioritySetBy': 'STAFF',
+      ':teamStatusKey': 'TEAM#PLUMBING#STATUS#ASSIGNED',
+    });
+    expect(ticketUpdate.Update?.ConditionExpression).toBe(
+      '#status = :received AND #version = :version',
+    );
+    expect(eventPut.Put?.Item).toMatchObject({
+      kind: 'TRIAGED',
+      actorType: 'STAFF',
+      actorStaffId: 'manager@example.com',
+      fromStatus: 'RECEIVED',
+      toStatus: 'ASSIGNED',
+      toPriority: 'MEDIUM',
+      toTeamId: 'PLUMBING',
+      note: 'Lift and lights',
+    });
+  });
+
+  it('records a triage by hand without a reason without a note', async () => {
+    await applyTriage('tkt_1', 3, {
+      ...update,
+      staff: { accountId: 'manager@example.com' },
+    });
+    const [, eventPut] = transactItems();
+    expect(eventPut.Put?.Item).toMatchObject({
+      actorType: 'STAFF',
+      actorStaffId: 'manager@example.com',
+    });
+    expect(eventPut.Put?.Item).not.toHaveProperty('note');
   });
 
   it('leaves safety fields out of an ordinary triage', async () => {

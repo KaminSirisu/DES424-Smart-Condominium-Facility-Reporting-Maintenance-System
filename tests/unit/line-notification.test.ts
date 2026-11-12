@@ -57,7 +57,7 @@ describe('LINE reporter channel', () => {
     vi.restoreAllMocks();
   });
 
-  it('is triggered by the receipt, assignment, status and merge events', () => {
+  it('is triggered by the receipt, assignment, status, merge and reopen events', () => {
     const { channel } = setup();
     expect(channel.name).toBe('LINE_REPORTER');
     expect(channel.kinds).toEqual(LINE_KINDS);
@@ -66,7 +66,25 @@ describe('LINE reporter channel', () => {
       'TRIAGED',
       'STATUS_CHANGED',
       'MERGED',
+      'REOPENED',
     ]);
+  });
+
+  it('sends the reopened notice to a reporter when a finished repair is reopened', async () => {
+    const { channel, push } = setup();
+
+    await expect(
+      channel.send(
+        ticket({ status: 'ASSIGNED', repairCycle: 2 }),
+        'Ubbb',
+        event('REOPENED'),
+      ),
+    ).resolves.toBe(true);
+
+    const [to, messages] = push.mock.calls[0];
+    expect(to).toBe('Ubbb');
+    expect(messages).toHaveLength(1);
+    expect(messages[0].altText).toContain('was reopened');
   });
 
   it('messages every reporter of the ticket', async () => {

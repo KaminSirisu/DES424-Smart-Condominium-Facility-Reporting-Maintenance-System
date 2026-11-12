@@ -6,6 +6,7 @@ import {
   buildAssignedMessage,
   buildCompletedMessage,
   buildMergedMessage,
+  buildReopenedMessage,
   buildReceiptMessage,
   buildStartedMessage,
   cleanText,
@@ -270,6 +271,36 @@ describe('completed message', () => {
       buildCompletedMessage(ticket({ id: 'tkt a/b' }), { liffUrl: LIFF }),
     ).map((a) => a.uri);
     expect(uris[0]).toBe(`${LIFF}/tickets/tkt%20a%2Fb`);
+  });
+});
+
+describe('buildReopenedMessage', () => {
+  const reopened = () => ticket({ status: 'ASSIGNED', repairCycle: 2 });
+
+  it('tells the reporter the repair will be checked again', () => {
+    const message = buildReopenedMessage(reopened(), { liffUrl: LIFF });
+
+    expect(message.altText).toBe(`Your report ${reopened().id} was reopened`);
+    const text = allText(message).join(' ');
+    expect(text).toContain('reopened');
+    expect(text).toContain(reopened().id);
+    expect(text).toContain('Beside the lobby elevator');
+  });
+
+  it('opens the report, and does not offer to re-open it again', () => {
+    const json = JSON.stringify(
+      buildReopenedMessage(reopened(), { liffUrl: LIFF }),
+    );
+
+    expect(json).toContain(`${LIFF}/tickets/${reopened().id}`);
+    expect(json).not.toContain('/reopen');
+    expect(json).not.toContain('Re-open');
+  });
+
+  it('leaves the button out without a LIFF url', () => {
+    expect(JSON.stringify(buildReopenedMessage(reopened()))).not.toContain(
+      '"uri"',
+    );
   });
 });
 

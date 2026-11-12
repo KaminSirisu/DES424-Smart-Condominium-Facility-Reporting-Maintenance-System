@@ -17,6 +17,8 @@ tags:
     description: Manager counts and historical analysis.
   - name: Staff auth
     description: Proposed staff session contract pending security review.
+  - name: Staff accounts
+    description: Account management for managers (RR-13).
 paths:
   /health:
     get:
@@ -45,7 +47,7 @@ paths:
         because only a technician can finish a job. The URL is a presigned PUT
         that expires after 5 minutes and is signed for exactly the requested
         content type and size: send the file with the returned method and
-        headers. The image must be JPEG, PNG or WebP of at most 10 MB, otherwise
+        headers. The image must be JPEG or PNG of at most 10 MiB, otherwise
         422. A later ticket action verifies the uploaded object, its purpose, and
         its owner before accepting the uploadId.
       operationId: createUploadIntent
@@ -78,8 +80,13 @@ paths:
         associations retained after a merge, newest first. A technician sees
         their team's tickets: ASSIGNED and IN_PROGRESS (the default) oldest
         first, or DONE alone newest completion first. A manager must name the
-        team with teamId. Staff can list only ASSIGNED, IN_PROGRESS or DONE
-        tickets, and DONE cannot be combined with another status (422). A page
+        team with teamId. status=RECEIVED alone, for a manager only (a
+        technician gets 403), lists the tickets waiting for triage, oldest
+        first: the ones the automatic triage could not classify, which have no
+        team, so teamId and location must be left out (400). They are read from
+        the last 3 months (a setting of the deployment). Staff can list only
+        RECEIVED (manager), ASSIGNED, IN_PROGRESS or DONE tickets; DONE and
+        RECEIVED cannot be combined with another status (422). A page
         can hold fewer tickets than limit while nextCursor is present, because
         filters are applied after the index is read; send nextCursor back as it
         is. A ticket ID or filter never bypasses authorization.
@@ -236,6 +243,11 @@ paths:
     get:
       tags: [Tickets]
       summary: Read ticket audit events
+      description: >-
+        Staff only. A technician reads the history of their team's tickets (a
+        ticket of another team, or one with no team yet, is 403); a manager
+        reads any ticket. Events come oldest first. nextCursor is present only
+        when there are more events; send it back as it is.
       operationId: listTicketEvents
       security:
         - staffToken: []
@@ -249,6 +261,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TicketEventPage'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{ticketId}/duplicates:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    get:
+      tags: [Tickets]
+      summary: Suggest open tickets that may describe the same problem
+      description: >-
+        Staff only. A technician asks about a ticket of their team (another
+        team is 403); a manager may ask about any ticket. The candidates are
+        the open tickets (ASSIGNED or IN_PROGRESS) of the same team with
+        exactly the same location text, not the ticket itself, oldest first.
+        This is only a suggestion: matching location text alone does not
+        establish a duplicate, so a technician confirms before merging, and the
+        merge endpoint applies its own rules. A ticket that is not open
+        (RECEIVED, DONE or MERGED) has no candidates and gets an empty page.
+        nextCursor is present only when there may be more; send it back as it
+        is.
+      operationId: listDuplicateCandidates
+      security:
+        - staffToken: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of candidate tickets.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketPage'
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -259,10 +306,18 @@ paths:
       tags: [Tickets]
       summary: Change ticket priority with an audit reason
       description: >-
-        A technician on the assigned team or a manager may change priority.
+        A technician on the assigned team or a manager may change priority; a
+        technician of another team gets 403. The reason is required when the
+        priority changes (400 without it) and optional when the current
+        priority is accepted, which the staff UI does with its Accept button.
         The backend records the actor, previous value, new value, reason, and
-        time, and sets prioritySetBy to STAFF. AI classification cannot
-        overwrite a later staff choice.
+        time (PRIORITY_CHANGED, or PRIORITY_CONFIRMED when the value is
+        unchanged), and sets prioritySetBy to STAFF. AI classification cannot
+        overwrite a later staff choice. The deadline is counted again from the
+        start of the SLA clock with the new priority; a downgrade does not
+        reset the clock. Only an ASSIGNED or IN_PROGRESS ticket can change;
+        any other status is 409. Asking again for a priority a person already
+        set is 200 and writes nothing.
       operationId: setTicketPriority
       security:
         - staffToken: []
@@ -284,6 +339,47 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /tickets/{ticketId}/triage:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    patch:
+      tags: [Tickets]
+      summary: Triage a ticket by hand
+      description: >-
+        Manager only; a technician gets 403, because the ticket belongs to no
+        team yet. For a ticket the automatic triage could not classify, which
+        stays RECEIVED (list them with GET /tickets?status=RECEIVED). The manager
+        names the team and the priority; the category is the team's name. It does
+        what the automatic triage does, in one transaction with a TRIAGED event
+        that names the manager (actorType STAFF, actorStaffId) and the reason:
+        the ticket becomes ASSIGNED, gets the team, the priority and a deadline
+        counted from its creation, prioritySetBy is STAFF, and it enters the
+        team's queue. The work order email to the team and the LINE message to
+        the reporter follow as after any triage. Only a RECEIVED ticket can be
+        triaged (409 otherwise, for example when the automatic triage just did
+        it). Asking again for what a manager already set is 200 and writes
+        nothing.
+      operationId: triageTicket
+      security:
+        - staffToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TriageTicket'
+      responses:
+        '200':
+          description: The ticket after triage.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /tickets/{ticketId}/assignment:
     parameters:
       - $ref: '#/components/parameters/TicketId'
@@ -291,9 +387,16 @@ paths:
       tags: [Tickets]
       summary: Reassign an unstarted ticket to another team
       description: >-
-        Manager only. Reassignment is allowed while ASSIGNED, before work
-        starts. It records the old team, new team, actor, reason, and time.
-        Reassigning IN_PROGRESS work needs a separate exception policy.
+        Manager only; a technician gets 403. Reassignment is allowed while
+        ASSIGNED, before work starts; any other status is 409. Reassigning
+        IN_PROGRESS work needs a separate exception policy. A teamId that is
+        not a maintenance team is 422, and the reason is required (400
+        without it). The ticket leaves the old team's open queue and enters the
+        new team's, and the deadline is counted again with the new team's SLA
+        policy from the start of the SLA clock (SLA-08). A REASSIGNED event
+        records the old team, new team, actor, reason, and time. The category
+        the AI chose is not changed. Asking for the team the ticket already
+        has is 200 and writes nothing.
       operationId: reassignTicket
       security:
         - staffToken: []
@@ -357,8 +460,17 @@ paths:
       tags: [Tickets]
       summary: Reopen an unresolved repair
       description: >-
-        An associated reporter may reopen DONE -> ASSIGNED. A REOPENED audit
-        event is recorded. Deadline reset behavior is not approved yet.
+        An associated reporter (a reporter of a merged source ticket included,
+        through the copy of their association on the ticket it was merged
+        into) may reopen a DONE ticket within 7 days of its completion; later
+        it is 409 and a new report is needed. The ticket goes back to ASSIGNED
+        in its team's queue with repairCycle one higher, and a REOPENED audit
+        event is recorded with the optional reason as its note. A new
+        resolution clock starts at the reopen with the same priority (SLA-10):
+        deadlineAt is counted from the reopen time. A ticket that is not DONE
+        is 409, and anyone who is not a reporter of the ticket gets 404.
+        Idempotency-Key is required; a retry of the request that reopened the
+        ticket is 200 and changes nothing.
       operationId: reopenTicket
       security:
         - lineToken: []
@@ -377,6 +489,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Ticket'
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -430,9 +543,14 @@ paths:
       tags: [Dashboard]
       summary: Read current manager dashboard counts
       description: >-
-        Managers monitor current tickets and team workloads. Team count and
-        priority-based SLA durations are not fixed in this draft; overdueCount
-        becomes meaningful only after the SLA policy is approved.
+        Manager only; a technician gets 403. The counts are made from the
+        tickets created in the last 24 months (a setting of the deployment), so
+        they are exact for that period and the period is the limit of the
+        report. openCount is RECEIVED, ASSIGNED and IN_PROGRESS tickets;
+        overdueCount is ASSIGNED and IN_PROGRESS tickets whose deadlineAt has
+        passed; countsByStatus has every status, with 0 for an empty one;
+        teamWorkloads lists every maintenance team with the ASSIGNED and
+        IN_PROGRESS tickets it has, 0 for an idle team.
       operationId: getDashboardSummary
       security:
         - staffToken: []
@@ -452,10 +570,14 @@ paths:
       description: >-
         Manager view across all current and previous ticket records, including
         RECEIVED, ASSIGNED, IN_PROGRESS, DONE, reopened, and MERGED tickets.
-        Optional dates filter by ticket creation time. Summary counts cover all
-        matching records, while items are paginated. Detailed status changes,
-        earlier repair cycles, and proof photos are available through each
-        ticket's events and photo-access endpoints.
+        Manager only; a technician gets 403. Optional dates filter by ticket
+        creation time (UTC dates, both inclusive). Summary counts cover all
+        matching records, while items are paginated, newest first. The report
+        reads the tickets created in the last 24 months (a setting of the
+        deployment): without from it starts there, and a from older than that
+        is 400. Detailed status changes, earlier repair cycles, and proof
+        photos are available through each ticket's events and photo-access
+        endpoints.
       operationId: getDashboardHistory
       security:
         - staffToken: []
@@ -495,6 +617,11 @@ paths:
     post:
       tags: [Staff auth]
       summary: Start a staff session (auth approach pending approval)
+      description: >-
+        Wrong credentials, a disabled account and an unknown email all get the
+        same 401. Five failed logins in a row lock the account for 15 minutes,
+        and more than 20 attempts in 15 minutes from one address are refused
+        too; both are 429 with Retry-After.
       operationId: loginStaff
       security: []
       requestBody:
@@ -510,11 +637,18 @@ paths:
                 password: { type: string, format: password }
       responses:
         '200':
-          description: Short-lived staff token; exact session model is open.
+          description: >-
+            A technician gets the staff session. A manager whose password was
+            right gets an MfaChallenge instead (unless MFA is switched off for
+            local development) and continues at /auth/staff/mfa/verify, or at
+            /auth/staff/mfa/enroll and /auth/staff/mfa/confirm when no
+            authenticator is set up. Tell the two apart by mfaRequired.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StaffSession'
+                oneOf:
+                  - $ref: '#/components/schemas/StaffSession'
+                  - $ref: '#/components/schemas/MfaChallenge'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
@@ -533,6 +667,183 @@ paths:
               schema:
                 $ref: '#/components/schemas/StaffProfile'
         '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/staff/mfa/enroll:
+    post:
+      tags: [Staff auth]
+      summary: Start the authenticator setup of a manager
+      description: >-
+        For a manager whose login answered mfaRequired with mfaEnrolled false.
+        Makes a secret, keeps it pending and shows it once, to be scanned as a
+        QR code of otpauthUri or typed into an authenticator app. The secret
+        stays pending until POST /auth/staff/mfa/confirm gets the first code
+        from it; a new call replaces a pending secret. Whoever enrolls an
+        account first owns its authenticator, so a new manager account should
+        be set up as soon as its password is handed over.
+      operationId: enrollStaffMfa
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [challengeToken]
+              properties:
+                challengeToken: { type: string }
+      responses:
+        '200':
+          description: The secret, shown once. The answer is never cached.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaEnrollment'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/staff/mfa/confirm:
+    post:
+      tags: [Staff auth]
+      summary: Finish the authenticator setup and log in
+      description: >-
+        The first correct code from the pending secret makes it the manager's
+        authenticator and starts the session. Confirming raises the account's
+        token version, so the challenge cannot be used again and sessions from
+        before MFA end. A wrong code counts towards the same lockout as a wrong
+        password (5 in a row lock the account for 15 minutes, 429).
+      operationId: confirmStaffMfa
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaCode'
+      responses:
+        '200':
+          description: Staff session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffSession'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/staff/mfa/verify:
+    post:
+      tags: [Staff auth]
+      summary: Log in with an authenticator code
+      description: >-
+        For a manager whose login answered mfaRequired with mfaEnrolled true.
+        A code is good once: a code that was already used is refused. A wrong
+        code counts towards the same lockout as a wrong password.
+      operationId: verifyStaffMfa
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaCode'
+      responses:
+        '200':
+          description: Staff session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffSession'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /staff-accounts:
+    get:
+      tags: [Staff accounts]
+      summary: List staff accounts
+      description: >-
+        Manager only; a technician gets 403. Every account, managers first and
+        then by email. No password hash or MFA secret is ever returned.
+      operationId: listStaffAccounts
+      security:
+        - staffToken: []
+      responses:
+        '200':
+          description: All staff accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedAccountList'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Staff accounts]
+      summary: Create a technician or manager account
+      description: >-
+        Manager only (SR-07: there is no self sign-up). The system makes the
+        password, stores only its hash and returns it once as
+        temporaryPassword, to be handed over in person. A technician account
+        needs a teamId and each team may have one active technician account; a
+        manager account has no teamId and sets up MFA at its first login.
+      operationId: createStaffAccount
+      security:
+        - staffToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStaffAccount'
+      responses:
+        '201':
+          description: Account created. The answer is never cached.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffAccountWithPassword'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /staff-accounts/{accountId}:
+    patch:
+      tags: [Staff accounts]
+      summary: Reset a password, disable or enable an account, or reset MFA
+      description: >-
+        Manager only. RESET_PASSWORD makes a new password and returns it once
+        as temporaryPassword; it also clears the failed-login count and any
+        lockout. SET_ACTIVE disables or enables the account. RESET_MFA removes
+        a manager's authenticator so the next login sets up a new one. Every
+        action ends all sessions of the account at once. A manager cannot
+        disable their own account or reset their own MFA (409); the only
+        manager who lost the authenticator uses the reset:manager-mfa script.
+        Every change is written to an audit trail.
+      operationId: updateStaffAccount
+      security:
+        - staffToken: []
+      parameters:
+        - $ref: '#/components/parameters/StaffAccountId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStaffAccount'
+      responses:
+        '200':
+          description: >-
+            The account after the change. temporaryPassword is present for
+            RESET_PASSWORD only. The answer is never cached.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffAccountWithPassword'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 components:
   securitySchemes:
     lineToken:
@@ -563,6 +874,12 @@ components:
       required: true
       description: Stable unique key for one intended action and its retries.
       schema: { type: string, minLength: 8, maxLength: 128 }
+    StaffAccountId:
+      in: path
+      name: accountId
+      required: true
+      description: The account's email. It may be sent as it is or percent encoded.
+      schema: { type: string }
   responses:
     BadRequest:
       description: Malformed request.
@@ -585,7 +902,7 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
     Conflict:
-      description: Current ticket state or idempotency key conflicts with this action.
+      description: The current state of the ticket or account, or an idempotency key, conflicts with this action.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -652,7 +969,6 @@ components:
           description: Starts at 1 and increments when a completed ticket reopens.
         category:
           { type: string, description: Maintenance domain after triage. }
-        suggestedPriority: { $ref: '#/components/schemas/Priority' }
         priority: { $ref: '#/components/schemas/Priority' }
         prioritySetBy:
           type: string
@@ -707,10 +1023,7 @@ components:
           type: string
           enum: [DEFECT, REPAIR_PROOF]
         contentType:
-          {
-            type: string,
-            description: 'One of image/jpeg, image/png or image/webp.',
-          }
+          { type: string, description: 'One of image/jpeg or image/png.' }
         sizeBytes:
           {
             type: integer,
@@ -731,10 +1044,28 @@ components:
     SetPriority:
       type: object
       additionalProperties: false
-      required: [priority, reason]
+      required: [priority]
       properties:
         priority: { $ref: '#/components/schemas/Priority' }
-        reason: { type: string, minLength: 1, maxLength: 1000 }
+        reason:
+          type: string
+          maxLength: 1000
+          description: Required when the priority changes; optional when accepting the current one.
+    TriageTicket:
+      type: object
+      additionalProperties: false
+      required: [teamId, priority]
+      properties:
+        teamId:
+          {
+            type: string,
+            description: One of the maintenance teams; also the category.,
+          }
+        priority: { $ref: '#/components/schemas/Priority' }
+        reason:
+          type: string
+          maxLength: 1000
+          description: Why the manager chose them; optional.
     ReassignTicket:
       type: object
       additionalProperties: false
@@ -800,9 +1131,15 @@ components:
         kind:
           type: string
           description: >-
-            Written so far: CREATED, TRIAGED, STATUS_CHANGED, MERGED (on a
-            merged source) and DUPLICATES_MERGED (on the canonical ticket).
-            STATUS_CHANGED and MERGED carry fromStatus and toStatus.
+            Written so far: CREATED, TRIAGED (by the system, or by a manager who triaged by hand: actorType STAFF with actorStaffId), STATUS_CHANGED, MERGED (on a
+            merged source), DUPLICATES_MERGED (on the canonical ticket) and
+            REOPENED (fromStatus DONE, toStatus ASSIGNED, repairCycle of the new
+            cycle, note is the reporter's reason) and REASSIGNED (fromTeamId,
+            toTeamId, note is the manager's reason) and four SLA events written by the system (actorType SYSTEM, repairCycle, note): SLA_TRIAGE_DELAYED (the ticket was still RECEIVED, not triaged, 5 minutes after it was created), SLA_WARNING (75% of the resolution time used), SLA_RESPONSE_BREACHED (the response target passed while the ticket was still ASSIGNED) and SLA_BREACHED (the resolution deadline passed while the ticket is still open; a CRITICAL ticket gets another one every hour until it is done). Each is written once per repair cycle, except the SLA_BREACHED reminders. STATUS_CHANGED, MERGED and
+            REOPENED carry fromStatus and toStatus. The staff
+            UI also shows PRIORITY_CHANGED and PRIORITY_CONFIRMED, which the
+            priority endpoint writes (fromPriority, toPriority, note), and any
+            other kind as it is.
         occurredAt: { type: string, format: date-time }
         actorType: { type: string, enum: [REPORTER, STAFF, SYSTEM] }
         actorStaffId: { type: string }
@@ -837,7 +1174,7 @@ components:
         overdueCount:
           type: integer
           minimum: 0
-          description: Omitted until SLA durations and countdown rules are approved.
+          description: ASSIGNED and IN_PROGRESS tickets whose deadlineAt has passed.
         countsByStatus:
           type: object
           additionalProperties: { type: integer, minimum: 0 }
@@ -906,7 +1243,8 @@ components:
           type: array
           description: >-
             Groups exact reporter-entered location strings; spelling variants
-            remain separate.
+            remain separate. Lists the 100 most reported locations, most
+            reported first.
           items:
             type: object
             required: [location, reportedCount, completedCount]
@@ -940,3 +1278,114 @@ components:
         teamName:
           type: string
           description: Display name of the team; present for a technician when the team has one.
+    MfaChallenge:
+      type: object
+      description: >-
+        The answer of a manager login whose password was right, while MFA is
+        required. It is not a session: the challenge is good for 5 minutes and
+        is exchanged for a StaffSession at the MFA endpoints.
+      required: [mfaRequired, mfaEnrolled, challengeToken, expiresInSeconds]
+      properties:
+        mfaRequired: { type: boolean, enum: [true] }
+        mfaEnrolled:
+          type: boolean
+          description: >-
+            True when the manager has an authenticator (use verify); false when
+            it has to be set up first (use enroll, then confirm).
+        challengeToken: { type: string }
+        expiresInSeconds: { type: integer, minimum: 1 }
+    MfaEnrollment:
+      type: object
+      required: [secret, otpauthUri]
+      properties:
+        secret:
+          type: string
+          description: Base32 TOTP secret, shown once.
+        otpauthUri:
+          type: string
+          description: otpauth:// link to show as a QR code.
+    MfaCode:
+      type: object
+      additionalProperties: false
+      required: [challengeToken, code]
+      properties:
+        challengeToken: { type: string }
+        code:
+          type: string
+          description: The 6 digits from the authenticator app; one space is allowed.
+          pattern: '^\s*\d{3}\s?\d{3}\s*$'
+    ManagedAccount:
+      type: object
+      required:
+        [
+          accountId,
+          email,
+          role,
+          displayName,
+          isActive,
+          passwordChangedAt,
+          createdAt,
+        ]
+      properties:
+        accountId: { type: string }
+        email: { type: string, format: email }
+        role: { type: string, enum: [TECHNICIAN, MANAGER] }
+        teamId: { type: string, description: 'Present for a TECHNICIAN only.' }
+        displayName: { type: string }
+        isActive: { type: boolean }
+        mfaEnabled:
+          type: boolean
+          description: Present for a MANAGER only; true once an authenticator has been confirmed.
+        lockedUntil:
+          type: string
+          format: date-time
+          description: Present while the account is locked out after failed logins.
+        lastLoginAt: { type: string, format: date-time }
+        passwordChangedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    ManagedAccountList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ManagedAccount' }
+    CreateStaffAccount:
+      type: object
+      additionalProperties: false
+      required: [email, role, displayName]
+      properties:
+        email: { type: string, format: email }
+        role: { type: string, enum: [TECHNICIAN, MANAGER] }
+        teamId:
+          {
+            type: string,
+            description: 'Required for a TECHNICIAN, not allowed for a MANAGER.',
+          }
+        displayName: { type: string, minLength: 1, maxLength: 100 }
+    UpdateStaffAccount:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [action]
+          properties:
+            action: { type: string, enum: [RESET_PASSWORD] }
+        - type: object
+          additionalProperties: false
+          required: [action, isActive]
+          properties:
+            action: { type: string, enum: [SET_ACTIVE] }
+            isActive: { type: boolean }
+        - type: object
+          additionalProperties: false
+          required: [action]
+          properties:
+            action: { type: string, enum: [RESET_MFA] }
+    StaffAccountWithPassword:
+      type: object
+      required: [account]
+      properties:
+        account: { $ref: '#/components/schemas/ManagedAccount' }
+        temporaryPassword:
+          type: string
+          description: Generated password, shown once. Present when an account is created and for RESET_PASSWORD.

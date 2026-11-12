@@ -4,11 +4,16 @@ import type {
   APIGatewayProxyStructuredResultV2,
 } from 'aws-lambda';
 import { extractBearerToken, verifyLineToken } from '../shared/line-token.js';
-import { consumeTicketQuota } from '../shared/rate-limit.js';
-import { createTicket, getTicket } from '../shared/ticket-repository.js';
+import { sourceIpOf } from '../shared/client-ip.js';
+import { ticketIpQuotaClaim, ticketQuotaClaim } from '../shared/rate-limit.js';
+import {
+  QuotaExceededError,
+  createTicket,
+  getTicket,
+} from '../shared/ticket-repository.js';
 import {
   UPLOAD_ID_PATTERN,
-  uploadExists,
+  uploadIsImage,
   uploadObjectKey,
 } from '../shared/upload-store.js';
 import { toTicketView } from './ticket-view.js';
@@ -28,8 +33,13 @@ import { ApiError, CreateTicketInput, TicketRecord } from './types.js';
  * rejects the duplicate. A retry with the same payload gets the original
  * 201 back; the same key with a different payload is a 409.
  *
+ * Defect photo (SR-21): the upload must be the reporter's own DEFECT upload,
+ * of a size within the limit, whose first bytes are a real image.
+ *
  * Rate limit (SR-31): a reporter may create 10 tickets per hour, then gets
- * 429 with Retry-After. See shared/rate-limit.ts.
+ * 429 with Retry-After. The count is written in the same transaction as the
+ * ticket, so only a ticket that is stored uses it up. See
+ * shared/rate-limit.ts.
  */
 
 const IDEMPOTENCY_KEY_MIN = 8;
@@ -217,24 +227,12 @@ export async function handler(
 
     if (
       !UPLOAD_ID_PATTERN.test(input.defectPhotoUploadId) ||
-      !(await uploadExists('DEFECT', lineUserId, input.defectPhotoUploadId))
+      !(await uploadIsImage('DEFECT', lineUserId, input.defectPhotoUploadId))
     ) {
       throw new ApiError(
         422,
         'UNPROCESSABLE',
-        'defectPhotoUploadId does not refer to a completed defect upload of yours.',
-      );
-    }
-
-    // Only requests that would create a ticket count toward the limit, so
-    // retries (replays above) and rejected requests never use it up.
-    const quota = await consumeTicketQuota(lineUserId);
-    if (!quota.allowed) {
-      throw new ApiError(
-        429,
-        'RATE_LIMITED',
-        'Too many reports. Please try again later.',
-        { 'Retry-After': String(quota.retryAfterSeconds) },
+        'defectPhotoUploadId does not refer to a completed defect photo upload of yours that is an image.',
       );
     }
 
@@ -264,8 +262,23 @@ export async function handler(
     };
 
     try {
-      await createTicket(record);
+      // The quotas (per reporter and per address) are claimed in the same
+      // transaction, so a ticket that is not stored (a retry, a lost race, a
+      // failure) never uses them up.
+      const ip = sourceIpOf(event);
+      await createTicket(record, [
+        ticketQuotaClaim(lineUserId),
+        ...(ip ? [ticketIpQuotaClaim(ip)] : []),
+      ]);
     } catch (err) {
+      if (err instanceof QuotaExceededError) {
+        throw new ApiError(
+          429,
+          'RATE_LIMITED',
+          'Too many reports. Please try again later.',
+          { 'Retry-After': String(err.retryAfterSeconds) },
+        );
+      }
       if (!isConditionalCheckFailure(err)) throw err;
       // Lost a race with a concurrent retry of the same request.
       const winner = await getTicket(ticketId);

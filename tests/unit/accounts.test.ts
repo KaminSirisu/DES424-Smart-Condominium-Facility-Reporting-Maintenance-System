@@ -12,6 +12,7 @@ import {
   normalizeUsername,
   recordFailedLogin,
   recordSuccessfulLogin,
+  toAccountRecord,
   toStaffProfile,
   type AccountRecord,
 } from '../../backend/src/shared/accounts.js';
@@ -354,5 +355,65 @@ describe('createAccount', () => {
       createAccount({ ...technician, ...override }, NOW),
     ).rejects.toThrow();
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe('MFA attributes of an account', () => {
+  const MANAGER_ITEM = {
+    ...TECHNICIAN_ITEM,
+    username: 'boss@example.com',
+    accountId: 'boss@example.com',
+    role: 'MANAGER',
+    teamId: undefined,
+  };
+
+  it('reads them when present and leaves them out when not', () => {
+    expect(toAccountRecord(MANAGER_ITEM).mfaSecret).toBeUndefined();
+    const account = toAccountRecord({
+      ...MANAGER_ITEM,
+      mfaSecret: 'v1.a.b.c',
+      mfaPendingSecret: 'v1.d.e.f',
+      mfaEnrolledAt: '2026-11-02T00:00:00.000Z',
+      mfaLastStep: 12,
+    });
+    expect(account).toMatchObject({
+      mfaSecret: 'v1.a.b.c',
+      mfaPendingSecret: 'v1.d.e.f',
+      mfaEnrolledAt: '2026-11-02T00:00:00.000Z',
+      mfaLastStep: 12,
+    });
+  });
+
+  it('refuses an MFA secret on a technician', () => {
+    expect(() =>
+      toAccountRecord({
+        ...TECHNICIAN_ITEM,
+        mfaSecret: 'v1.a.b.c',
+        mfaEnrolledAt: '2026-11-02T00:00:00.000Z',
+      }),
+    ).toThrow(/mfaSecret/);
+  });
+
+  it('refuses a secret without its enrolment time, and the other way round', () => {
+    expect(() =>
+      toAccountRecord({ ...MANAGER_ITEM, mfaSecret: 'v1.a.b.c' }),
+    ).toThrow(/mfaEnrolledAt/);
+    expect(() =>
+      toAccountRecord({
+        ...MANAGER_ITEM,
+        mfaEnrolledAt: '2026-11-02T00:00:00.000Z',
+      }),
+    ).toThrow(/mfaEnrolledAt/);
+  });
+
+  it('refuses a last step that is not a whole number from zero', () => {
+    for (const mfaLastStep of [-1, 1.5, '7']) {
+      expect(() => toAccountRecord({ ...MANAGER_ITEM, mfaLastStep })).toThrow(
+        /mfaLastStep/,
+      );
+    }
+    expect(
+      toAccountRecord({ ...MANAGER_ITEM, mfaLastStep: 0 }).mfaLastStep,
+    ).toBe(0);
   });
 });

@@ -15,6 +15,12 @@ import { tableName } from './tables.js';
  * lockedUntil, passwordChangedAt, lastLoginAt, createdAt, updatedAt. Times are
  * UTC ISO 8601 strings.
  *
+ * Manager MFA (SR-09) adds four attributes, all absent until a manager sets up
+ * an authenticator: `mfaSecret` (the TOTP secret, encrypted by
+ * shared/mfa-secret.ts), `mfaPendingSecret` (a secret that was shown but not
+ * yet confirmed with a code), `mfaEnrolledAt`, and `mfaLastStep` (the last TOTP
+ * step that was accepted, so a code cannot be used twice).
+ *
  * Lockout (SR-09): the fifth failed login in a row locks the account for 15
  * minutes. The counter and the lock are conditional updates, so concurrent
  * wrong guesses cannot get more tries than the limit.
@@ -38,6 +44,13 @@ export interface AccountRecord {
   lockedUntil?: string;
   passwordChangedAt: string;
   lastLoginAt?: string;
+  /** The encrypted TOTP secret; set once the manager has confirmed a code. */
+  mfaSecret?: string;
+  /** An encrypted secret waiting for its first code. */
+  mfaPendingSecret?: string;
+  mfaEnrolledAt?: string;
+  /** The last TOTP step accepted for this account. */
+  mfaLastStep?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -110,12 +123,19 @@ function counter(item: Record<string, unknown>, field: string): number {
   return value;
 }
 
+function optionalCounter(
+  item: Record<string, unknown>,
+  field: string,
+): number | undefined {
+  return item[field] === undefined ? undefined : counter(item, field);
+}
+
 /**
  * A stored item that does not fit the model is a data error, not a bad login:
  * it throws, so the caller answers 500 and the problem is seen and fixed
  * instead of the account silently not existing.
  */
-function toAccount(item: Record<string, unknown>): AccountRecord {
+export function toAccountRecord(item: Record<string, unknown>): AccountRecord {
   const role = item.role;
   if (role !== 'TECHNICIAN' && role !== 'MANAGER') throw malformed('role');
 
@@ -126,6 +146,17 @@ function toAccount(item: Record<string, unknown>): AccountRecord {
   if (role === 'MANAGER' && teamId !== undefined) throw malformed('teamId');
 
   if (typeof item.isActive !== 'boolean') throw malformed('isActive');
+
+  const mfaSecret = optionalString(item, 'mfaSecret');
+  const mfaPendingSecret = optionalString(item, 'mfaPendingSecret');
+  const mfaEnrolledAt = optionalString(item, 'mfaEnrolledAt');
+  const mfaLastStep = optionalCounter(item, 'mfaLastStep');
+  if (role === 'TECHNICIAN' && mfaSecret !== undefined) {
+    throw malformed('mfaSecret');
+  }
+  if ((mfaSecret === undefined) !== (mfaEnrolledAt === undefined)) {
+    throw malformed('mfaEnrolledAt');
+  }
 
   return {
     accountId: requiredString(item, 'accountId'),
@@ -140,6 +171,10 @@ function toAccount(item: Record<string, unknown>): AccountRecord {
     lockedUntil: optionalString(item, 'lockedUntil'),
     passwordChangedAt: requiredString(item, 'passwordChangedAt'),
     lastLoginAt: optionalString(item, 'lastLoginAt'),
+    mfaSecret,
+    mfaPendingSecret,
+    mfaEnrolledAt,
+    mfaLastStep,
     createdAt: requiredString(item, 'createdAt'),
     updatedAt: requiredString(item, 'updatedAt'),
   };
@@ -163,7 +198,7 @@ export async function getAccountByUsername(
       ConsistentRead: true,
     }),
   );
-  return result.Item ? toAccount(result.Item) : null;
+  return result.Item ? toAccountRecord(result.Item) : null;
 }
 
 /**
@@ -285,7 +320,7 @@ export async function createAccount(
     createdAt: nowIso,
     updatedAt: nowIso,
   };
-  toAccount(item);
+  toAccountRecord(item);
 
   try {
     await ddb.send(

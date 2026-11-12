@@ -17,7 +17,6 @@ const VISIBLE_FIELDS = [
   'status',
   'repairCycle',
   'category',
-  'suggestedPriority',
   'priority',
   'prioritySetBy',
   'teamId',

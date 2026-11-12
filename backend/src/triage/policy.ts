@@ -62,11 +62,14 @@ export function priorityFor(impact: Level, urgency: Level): Priority {
   return MATRIX[impact][urgency];
 }
 
-/** Default hours from created_at to DONE (requirements doc §3.5). */
+/**
+ * Default hours from created_at to DONE, as the team set them: the same for
+ * every team. The requirements document (§3.5) proposed 4, 24 and 120.
+ */
 const DEFAULT_RESOLUTION_HOURS: Record<Priority, number> = {
-  CRITICAL: 4,
-  MEDIUM: 24,
-  LOW: 120,
+  CRITICAL: 3,
+  MEDIUM: 12,
+  LOW: 48,
 };
 
 /** Per-team overrides; empty until the juristic office confirms any. */
@@ -74,7 +77,53 @@ const TEAM_RESOLUTION_HOURS: Partial<
   Record<TeamId, Partial<Record<Priority, number>>>
 > = {};
 
-export const SLA_POLICY_VERSION = 1;
+/**
+ * Minutes from the start of the SLA clock to the first sign of work, by
+ * priority (requirements §3.5): a ticket still ASSIGNED after that has missed
+ * its response target. The same for every team; the team's resolution hours
+ * (3, 12, 48) are not shorter than these, so they are kept as in the document.
+ */
+const RESPONSE_MINUTES: Record<Priority, number> = {
+  CRITICAL: 15,
+  MEDIUM: 120,
+  LOW: 1440,
+};
+
+export function responseMinutes(priority: Priority): number {
+  return RESPONSE_MINUTES[priority];
+}
+
+/**
+ * A ticket still RECEIVED, not triaged, this many minutes after it was created
+ * goes to the managers' attention (SLA-06): the automatic triage normally
+ * takes seconds.
+ */
+export const TRIAGE_DELAY_MINUTES = 5;
+
+/** The warning (E0) comes when this share of the resolution time is used. */
+export const SLA_WARNING_SHARE = 0.75;
+
+/** A CRITICAL ticket that is overdue is alerted again this often (E2). */
+export const SLA_REPEAT_MINUTES = 60;
+
+/**
+ * 1: the hours of requirements §3.5 (4, 24, 120). 2: the team's hours (3, 12,
+ * 48), with the response targets above.
+ */
+export const SLA_POLICY_VERSION = 2;
+
+/**
+ * When a ticket's current SLA clock started: its creation, the earlier start
+ * of a ticket that was merged into it (SLA-09), or the time of its last reopen
+ * (SLA-10). A deadline is always counted from this time, also when the
+ * priority changes (SLA-07).
+ */
+export function slaStartOf(ticket: {
+  createdAt: string;
+  slaStartAt?: string;
+}): string {
+  return ticket.slaStartAt ?? ticket.createdAt;
+}
 
 export function resolutionHours(teamId: TeamId, priority: Priority): number {
   return (

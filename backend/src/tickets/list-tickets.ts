@@ -4,17 +4,29 @@ import type {
 } from 'aws-lambda';
 import {
   listCompletedTickets,
+  listReceivedTickets,
   listReporterTickets,
   listTeamTickets,
-  type OpenPosition,
   type OpenStatus,
   type TicketFilter,
   type TicketListPage,
 } from '../shared/ticket-repository.js';
 import { isTeamId } from '../triage/policy.js';
 import { errorResponse, json } from './staff-http.js';
+import {
+  badRequest,
+  decodeCursor,
+  encodeCursor,
+  OPEN_STATUSES,
+  openCursor,
+  parseDate,
+  parseLimit,
+  scalarParam,
+  stringCursor,
+} from './paging.js';
 import { identifyCaller } from './ticket-access.js';
 import { toTicketView } from './ticket-view.js';
+import { triageQueueWindow } from './triage-queue.js';
 import { ApiError, type TicketRecord, type TicketStatus } from './types.js';
 
 /**
@@ -32,17 +44,18 @@ import { ApiError, type TicketRecord, type TicketStatus } from './types.js';
  *               first, optionally within completedFrom..completedTo (UTC
  *               dates, inclusive). teamId, when given, must be their own (403).
  *   manager     the same, for the team named by teamId, which is required.
+ *               status RECEIVED alone (no teamId, no location filter) lists the
+ *               tickets waiting for a manager's triage, oldest first: the ones
+ *               the automatic triage could not classify, which have no team
+ *               (see triage-queue.ts and PATCH /tickets/{ticketId}/triage).
+ *               A technician asking for RECEIVED is 403.
  *
  * The staff UI sends `status` more than once, so it is read from the raw query
- * string. Any other staff status (RECEIVED, MERGED) is 422: there is no index
- * for it yet, and DONE cannot be mixed with the open statuses. A page may hold
+ * string. Any other staff status (MERGED) is 422: there is no index for it,
+ * and DONE and RECEIVED cannot be mixed with other statuses. A page may hold
  * fewer than `limit` tickets while `nextCursor` is present, because filters are
  * applied after the index is read. The cursor is opaque; send it back as is.
  */
-
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 100;
-const CURSOR_MAX_LENGTH = 1000;
 
 const STATUSES: TicketStatus[] = [
   'RECEIVED',
@@ -51,7 +64,6 @@ const STATUSES: TicketStatus[] = [
   'DONE',
   'MERGED',
 ];
-const OPEN_STATUSES: OpenStatus[] = ['ASSIGNED', 'IN_PROGRESS'];
 const SCALAR_PARAMS = [
   'cursor',
   'limit',
@@ -72,36 +84,6 @@ interface Query {
   completedTo?: string;
 }
 
-function badRequest(message: string): ApiError {
-  return new ApiError(400, 'BAD_REQUEST', message);
-}
-
-function encodeCursor(value: unknown): string {
-  return Buffer.from(JSON.stringify(value)).toString('base64url');
-}
-
-function decodeCursor(raw: string): unknown {
-  if (raw.length > CURSOR_MAX_LENGTH) throw badRequest('cursor is not valid.');
-  try {
-    return JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-  } catch {
-    throw badRequest('cursor is not valid.');
-  }
-}
-
-/** A YYYY-MM-DD string that is a real calendar date, else a 400. */
-function parseDate(name: string, value: string): Date {
-  const date = new Date(`${value}T00:00:00.000Z`);
-  if (
-    !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
-    Number.isNaN(date.getTime()) ||
-    date.toISOString().slice(0, 10) !== value
-  ) {
-    throw badRequest(`${name} must be a date as YYYY-MM-DD.`);
-  }
-  return date;
-}
-
 function parseQuery(event: APIGatewayProxyEventV2): Query {
   const params = new URLSearchParams(event.rawQueryString ?? '');
 
@@ -110,20 +92,10 @@ function parseQuery(event: APIGatewayProxyEventV2): Query {
       throw badRequest(`Unknown query parameter: ${name}.`);
     }
   }
-  const scalar = (name: string): string | undefined => {
-    const values = params.getAll(name);
-    if (values.length > 1) throw badRequest(`${name} may be given once.`);
-    return values[0];
-  };
+  const scalar = (name: string): string | undefined =>
+    scalarParam(params, name);
 
-  let limit = DEFAULT_LIMIT;
-  const rawLimit = scalar('limit');
-  if (rawLimit !== undefined) {
-    limit = Number(rawLimit);
-    if (!/^\d+$/.test(rawLimit) || limit < 1 || limit > MAX_LIMIT) {
-      throw badRequest(`limit must be a whole number from 1 to ${MAX_LIMIT}.`);
-    }
-  }
+  const limit = parseLimit(scalar('limit'));
 
   const rawStatuses = params.getAll('status');
   const statuses = rawStatuses.length
@@ -145,38 +117,6 @@ function parseQuery(event: APIGatewayProxyEventV2): Query {
     completedFrom: scalar('completedFrom'),
     completedTo: scalar('completedTo'),
   };
-}
-
-function isKeyString(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    value !== '' &&
-    value.length <= CURSOR_MAX_LENGTH
-  );
-}
-
-/** The one string a reporter or completed-list cursor holds under `field`. */
-function stringCursor(cursor: unknown, field: string): string | undefined {
-  if (cursor === undefined) return undefined;
-  const value = (cursor as Record<string, unknown> | null)?.[field];
-  if (!isKeyString(value)) throw badRequest('cursor is not valid.');
-  return value;
-}
-
-function openCursor(cursor: unknown): OpenPosition {
-  if (cursor === undefined) return {};
-  const value = (cursor as Record<string, unknown> | null)?.o;
-  if (typeof value !== 'object' || value === null) {
-    throw badRequest('cursor is not valid.');
-  }
-  const position: OpenPosition = {};
-  for (const status of OPEN_STATUSES) {
-    const key = (value as Record<string, unknown>)[status];
-    if (key === undefined) continue;
-    if (!isKeyString(key)) throw badRequest('cursor is not valid.');
-    position[status] = key;
-  }
-  return position;
 }
 
 /** The page for a reporter. */
@@ -207,12 +147,54 @@ async function reporterPage(
   };
 }
 
+/** The page of tickets waiting for triage, for a manager. */
+async function receivedPage(
+  staff: { role: 'TECHNICIAN' | 'MANAGER' },
+  query: Query,
+): Promise<TicketListPage<unknown>> {
+  if (staff.role !== 'MANAGER') {
+    throw new ApiError(
+      403,
+      'FORBIDDEN',
+      'Only a manager can list tickets waiting for triage.',
+    );
+  }
+  if (query.statuses?.length !== 1) {
+    throw new ApiError(
+      422,
+      'UNPROCESSABLE',
+      'status RECEIVED cannot be combined with other statuses.',
+    );
+  }
+  if (query.teamId !== undefined) {
+    throw badRequest('A RECEIVED ticket has no team: leave teamId out.');
+  }
+  if (query.location !== undefined) {
+    throw badRequest('location cannot be used with status RECEIVED.');
+  }
+  if (query.completedFrom !== undefined || query.completedTo !== undefined) {
+    throw badRequest('completedFrom and completedTo need status=DONE.');
+  }
+  const page = await listReceivedTickets(triageQueueWindow(new Date()), {
+    limit: query.limit,
+    after: stringCursor(query.cursor, 'q'),
+  });
+  return {
+    tickets: page.tickets,
+    ...(page.next ? { next: { q: page.next } } : {}),
+  };
+}
+
 /** The page for a technician or a manager. */
 async function staffPage(
   staff: { role: 'TECHNICIAN' | 'MANAGER'; teamId?: string },
   query: Query,
   filter: TicketFilter,
 ): Promise<TicketListPage<unknown>> {
+  if (query.statuses?.includes('RECEIVED')) {
+    return receivedPage(staff, query);
+  }
+
   let teamId: string;
   if (staff.role === 'TECHNICIAN') {
     if (query.teamId !== undefined && query.teamId !== staff.teamId) {

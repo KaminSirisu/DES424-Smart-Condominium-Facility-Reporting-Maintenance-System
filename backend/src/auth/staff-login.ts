@@ -9,13 +9,18 @@ import {
   recordSuccessfulLogin,
 } from '../shared/accounts.js';
 import { verifyPassword } from '../shared/password.js';
-import { staffProfileOf } from '../shared/staff-profile.js';
 import {
-  signStaffToken,
-  STAFF_TOKEN_MAX_SECONDS,
-} from '../shared/staff-token.js';
+  MFA_CHALLENGE_SECONDS,
+  signMfaChallenge,
+} from '../shared/mfa-challenge.js';
+import { managerMfaRequired } from '../shared/mfa-policy.js';
+import { sourceIpOf } from '../shared/client-ip.js';
+import { consumeLoginIpQuota } from '../shared/rate-limit.js';
 import { errorResponse, json } from '../tickets/staff-http.js';
 import { ApiError } from '../tickets/types.js';
+import { parseJsonObject } from './json-body.js';
+import { tooManyAttempts, wrongCredentials } from './login-errors.js';
+import { noStore, sessionResponse } from './staff-session.js';
 
 /**
  * POST /auth/staff/login — start a staff session (SCFRMS-43, SR-07 to SR-10).
@@ -25,11 +30,17 @@ import { ApiError } from '../tickets/types.js';
  * the Accounts table (see shared/accounts.ts). On success the answer carries
  * a 12 hour staff token (shared/staff-token.ts) and the staff profile.
  *
+ * A manager needs a second step (SR-09, unless MANAGER_MFA_REQUIRED is
+ * `false`): after the right password the answer is `{ mfaRequired: true,
+ * mfaEnrolled, challengeToken, expiresInSeconds }` instead of a session, and
+ * auth/staff-mfa.ts turns the challenge and a code into the session.
+ *
  * A wrong email, a wrong password and a disabled account all get the same
  * `401` and message, so an answer never says which accounts exist. The five
  * failed logins in a row lock the account for 15 minutes (SR-09): while it is
- * locked, even the right password gets `429` with Retry-After. The per-IP
- * limit of SR-09 is an AWS WAF rule on API Gateway, not code.
+ * locked, even the right password gets `429` with Retry-After. A second limit
+ * is per address: 20 attempts per 15 minutes from one address (SR-09, counted
+ * in shared/rate-limit.ts), also `429` with Retry-After.
  *
  * Passwords and tokens are never logged.
  */
@@ -44,31 +55,7 @@ interface LoginInput {
 }
 
 function parseBody(event: APIGatewayProxyEventV2): LoginInput {
-  const raw = event.isBase64Encoded
-    ? Buffer.from(event.body ?? '', 'base64').toString('utf8')
-    : event.body;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw ?? '');
-  } catch {
-    throw new ApiError(400, 'BAD_REQUEST', 'Request body must be valid JSON.');
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new ApiError(
-      400,
-      'BAD_REQUEST',
-      'Request body must be a JSON object.',
-    );
-  }
-  const body = parsed as Record<string, unknown>;
-
-  const unknownField = Object.keys(body).find(
-    (k) => !ALLOWED_FIELDS.includes(k),
-  );
-  if (unknownField) {
-    throw new ApiError(400, 'BAD_REQUEST', `Unknown field: ${unknownField}.`);
-  }
+  const body = parseJsonObject(event, ALLOWED_FIELDS);
 
   const { email, password } = body;
   if (
@@ -92,26 +79,28 @@ function parseBody(event: APIGatewayProxyEventV2): LoginInput {
   return { email, password };
 }
 
-function wrongCredentials(): ApiError {
-  return new ApiError(401, 'UNAUTHORIZED', 'Incorrect email or password.');
-}
-
-function tooManyAttempts(lockedUntil: string, now: Date): ApiError {
-  const seconds = Math.ceil((Date.parse(lockedUntil) - now.getTime()) / 1000);
-  return new ApiError(
-    429,
-    'RATE_LIMITED',
-    'Too many failed logins. Please try again later.',
-    { 'Retry-After': String(Math.max(1, seconds)) },
-  );
-}
-
 export async function handler(
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   try {
-    const { email, password } = parseBody(event);
     const now = new Date();
+
+    // Counted first, so every attempt from an address counts, also one with a
+    // wrong password or a body that cannot be read.
+    const ip = sourceIpOf(event);
+    if (ip) {
+      const quota = await consumeLoginIpQuota(ip, now);
+      if (!quota.allowed) {
+        throw new ApiError(
+          429,
+          'RATE_LIMITED',
+          'Too many login attempts from this address. Please try again later.',
+          { 'Retry-After': String(quota.retryAfterSeconds) },
+        );
+      }
+    }
+
+    const { email, password } = parseBody(event);
 
     const account = await getAccountByUsername(email);
     if (account && isLocked(account, now) && account.lockedUntil) {
@@ -132,27 +121,28 @@ export async function handler(
     }
     if (!account.isActive) throw wrongCredentials();
 
-    await recordSuccessfulLogin(account.username, now);
+    // A manager's password is only the first step (SR-09). The failed-login
+    // count is left as it is until the code step succeeds, so wrong codes
+    // count towards the same lockout and a right password cannot reset it.
+    if (account.role === 'MANAGER' && managerMfaRequired()) {
+      return noStore(
+        json(200, {
+          mfaRequired: true,
+          mfaEnrolled: account.mfaSecret !== undefined,
+          challengeToken: signMfaChallenge(
+            {
+              accountId: account.accountId,
+              tokenVersion: account.tokenVersion,
+            },
+            now,
+          ),
+          expiresInSeconds: MFA_CHALLENGE_SECONDS,
+        }),
+      );
+    }
 
-    const accessToken = signStaffToken(
-      {
-        accountId: account.accountId,
-        role: account.role,
-        ...(account.teamId ? { teamId: account.teamId } : {}),
-        tokenVersion: account.tokenVersion,
-      },
-      now,
-    );
-    const response = json(200, {
-      accessToken,
-      expiresInSeconds: STAFF_TOKEN_MAX_SECONDS,
-      staff: await staffProfileOf(account),
-    });
-    return {
-      ...response,
-      // A token must never be kept by a cache.
-      headers: { ...response.headers, 'cache-control': 'no-store' },
-    };
+    await recordSuccessfulLogin(account.username, now);
+    return await sessionResponse(account, now);
   } catch (err) {
     return errorResponse(
       err,

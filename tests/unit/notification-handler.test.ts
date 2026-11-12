@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DynamoDBRecord, DynamoDBStreamEvent } from 'aws-lambda';
 import type { TicketRecord } from '../../backend/src/tickets/types';
 
@@ -15,13 +15,34 @@ vi.mock('../../backend/src/notifications/work-order-email', () => ({
 vi.mock('../../backend/src/notifications/line-notification', () => ({
   lineReporterChannel: {
     name: 'LINE_REPORTER',
-    kinds: ['CREATED', 'TRIAGED', 'MERGED'],
+    kinds: ['CREATED', 'TRIAGED', 'MERGED', 'REOPENED'],
     recipients: vi.fn(),
     send: vi.fn(),
   },
 }));
 
-import { handler } from '../../backend/src/notifications/notification-handler';
+vi.mock('../../backend/src/notifications/sla-breach-notification', () => ({
+  emailSupervisorsChannel: {
+    name: 'EMAIL_SUPERVISORS',
+    kinds: ['SLA_BREACHED', 'SLA_RESPONSE_BREACHED', 'SLA_TRIAGE_DELAYED'],
+    recipients: vi.fn(),
+    send: vi.fn(),
+  },
+}));
+vi.mock('../../backend/src/notifications/sla-warning-notification', () => ({
+  emailTeamWarningChannel: {
+    name: 'EMAIL_TEAM_WARNING',
+    kinds: ['SLA_WARNING'],
+    recipients: vi.fn(),
+    send: vi.fn(),
+  },
+}));
+
+import {
+  CHANNELS,
+  handler,
+  selectChannels,
+} from '../../backend/src/notifications/notification-handler';
 import { getTicket } from '../../backend/src/shared/ticket-repository';
 import {
   hasSent,
@@ -30,6 +51,14 @@ import {
 import { sendWorkOrderEmail } from '../../backend/src/notifications/work-order-email';
 import { lineReporterChannel } from '../../backend/src/notifications/line-notification';
 
+import { emailSupervisorsChannel } from '../../backend/src/notifications/sla-breach-notification';
+
+import { emailTeamWarningChannel } from '../../backend/src/notifications/sla-warning-notification';
+
+const warningRecipients = vi.mocked(emailTeamWarningChannel.recipients);
+const warningSend = vi.mocked(emailTeamWarningChannel.send);
+const supervisorRecipients = vi.mocked(emailSupervisorsChannel.recipients);
+const supervisorSend = vi.mocked(emailSupervisorsChannel.send);
 const lineRecipients = vi.mocked(lineReporterChannel.recipients);
 const lineSend = vi.mocked(lineReporterChannel.send);
 
@@ -82,6 +111,7 @@ const created = (sequence = '1') => record('CREATED', sequence);
 describe('notification stream handler', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.unstubAllEnvs();
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.mocked(hasSent).mockResolvedValue(false);
@@ -123,6 +153,108 @@ describe('notification stream handler', () => {
     );
   });
 
+  it('alerts every supervisor, and nobody else, when an SLA breach is recorded', async () => {
+    supervisorRecipients.mockResolvedValue(['a@example.com', 'b@example.com']);
+    supervisorSend.mockResolvedValue(true);
+
+    const result = await handler(eventOf(record('SLA_BREACHED', '1')));
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    expect(supervisorSend).toHaveBeenCalledTimes(2);
+    expect(supervisorSend).toHaveBeenCalledWith(ticket(), 'a@example.com', {
+      ticketId: 'tkt_1',
+      eventId: 'tkt_1_sla_breached',
+      kind: 'SLA_BREACHED',
+    });
+    expect(
+      vi.mocked(markSent).mock.calls.map((call) => call.slice(0, 3)),
+    ).toEqual([
+      ['tkt_1', 'tkt_1_sla_breached', 'EMAIL_SUPERVISORS:a@example.com'],
+      ['tkt_1', 'tkt_1_sla_breached', 'EMAIL_SUPERVISORS:b@example.com'],
+    ]);
+    // The reporters and the team are not told that the team is late.
+    expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).not.toHaveBeenCalled();
+  });
+
+  it('alerts the supervisors, and no one else, when a ticket misses its response target', async () => {
+    supervisorRecipients.mockResolvedValue(['a@example.com']);
+    supervisorSend.mockResolvedValue(true);
+
+    await handler(eventOf(record('SLA_RESPONSE_BREACHED', '1')));
+
+    expect(supervisorSend).toHaveBeenCalledWith(ticket(), 'a@example.com', {
+      ticketId: 'tkt_1',
+      eventId: 'tkt_1_sla_response_breached',
+      kind: 'SLA_RESPONSE_BREACHED',
+    });
+    expect(warningSend).not.toHaveBeenCalled();
+    expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).not.toHaveBeenCalled();
+  });
+
+  it('alerts the supervisors, and no one else, when a ticket waits too long for triage', async () => {
+    supervisorRecipients.mockResolvedValue(['a@example.com']);
+    supervisorSend.mockResolvedValue(true);
+
+    await handler(eventOf(record('SLA_TRIAGE_DELAYED', '1')));
+
+    expect(supervisorSend).toHaveBeenCalledWith(ticket(), 'a@example.com', {
+      ticketId: 'tkt_1',
+      eventId: 'tkt_1_sla_triage_delayed',
+      kind: 'SLA_TRIAGE_DELAYED',
+    });
+    expect(warningSend).not.toHaveBeenCalled();
+    expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).not.toHaveBeenCalled();
+  });
+
+  it('warns the team, and no one else, when a ticket has used 75% of its time', async () => {
+    warningRecipients.mockResolvedValue(['PLUMBING']);
+    warningSend.mockResolvedValue(true);
+
+    await handler(eventOf(record('SLA_WARNING', '1')));
+
+    expect(warningSend).toHaveBeenCalledWith(ticket(), 'PLUMBING', {
+      ticketId: 'tkt_1',
+      eventId: 'tkt_1_sla_warning',
+      kind: 'SLA_WARNING',
+    });
+    expect(vi.mocked(markSent).mock.calls.map((c) => c.slice(0, 3))).toEqual([
+      ['tkt_1', 'tkt_1_sla_warning', 'EMAIL_TEAM_WARNING:PLUMBING'],
+    ]);
+    expect(supervisorSend).not.toHaveBeenCalled();
+    expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).not.toHaveBeenCalled();
+  });
+
+  it('does not mark a warning as sent when the team has no address', async () => {
+    warningRecipients.mockResolvedValue(['PLUMBING']);
+    warningSend.mockResolvedValue(false);
+    await handler(eventOf(record('SLA_WARNING', '1')));
+    expect(markSent).not.toHaveBeenCalled();
+  });
+
+  it('does not alert a supervisor again on a retry, and does not alert for other events', async () => {
+    supervisorRecipients.mockResolvedValue(['a@example.com', 'b@example.com']);
+    supervisorSend.mockResolvedValue(true);
+    vi.mocked(hasSent).mockImplementation(
+      async (_t, _e, key) => key === 'EMAIL_SUPERVISORS:a@example.com',
+    );
+
+    await handler(eventOf(record('SLA_BREACHED', '1')));
+    expect(supervisorSend).toHaveBeenCalledTimes(1);
+    expect(supervisorSend).toHaveBeenCalledWith(
+      ticket(),
+      'b@example.com',
+      expect.anything(),
+    );
+
+    supervisorSend.mockClear();
+    await handler(eventOf(triaged(), created('2')));
+    expect(supervisorSend).not.toHaveBeenCalled();
+  });
+
   it('sends only the LINE receipt when a ticket is created', async () => {
     await handler(eventOf(created()));
 
@@ -147,6 +279,22 @@ describe('notification stream handler', () => {
       ticket(),
       'Uaaa',
       expect.objectContaining({ kind: 'MERGED', eventId: 'tkt_1_merged' }),
+    );
+  });
+
+  it('sends only the LINE reopened notice, and no work order email, when a ticket is reopened', async () => {
+    const result = await handler(eventOf(record('REOPENED', '1')));
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+    expect(lineSend).toHaveBeenCalledTimes(2);
+    expect(lineSend).toHaveBeenCalledWith(
+      ticket(),
+      'Uaaa',
+      expect.objectContaining({
+        kind: 'REOPENED',
+        eventId: 'tkt_1_reopened',
+      }),
     );
   });
 
@@ -256,7 +404,7 @@ describe('notification stream handler', () => {
     expect(getTicket).toHaveBeenCalledOnce();
   });
 
-  it('reports a temporary email failure and stops so Lambda retries from there', async () => {
+  it('reports a temporary email failure so Lambda retries from there, after messaging the reporters', async () => {
     vi.mocked(sendWorkOrderEmail).mockRejectedValue(new Error('throttled'));
 
     const result = await handler(
@@ -265,7 +413,13 @@ describe('notification stream handler', () => {
 
     expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: '10' }] });
     expect(sendWorkOrderEmail).toHaveBeenCalledOnce();
-    expect(markSent).not.toHaveBeenCalled();
+    // the LINE messages of the same event still went out and were recorded
+    expect(vi.mocked(markSent).mock.calls.map((call) => call[2])).toEqual([
+      'LINE_REPORTER:Uaaa',
+      'LINE_REPORTER:Ubbb',
+    ]);
+    // the second event is left for the retry
+    expect(getTicket).toHaveBeenCalledOnce();
   });
 
   it('retries when recording a send fails, rather than losing the record', async () => {
@@ -297,5 +451,189 @@ describe('notification stream handler', () => {
     expect(logged).not.toContain('Uaaa');
     expect(logged).not.toContain('Ubbb');
     expect(logged).toContain('LINE_REPORTER');
+  });
+});
+
+describe('independent channels', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.unstubAllEnvs();
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(hasSent).mockResolvedValue(false);
+    vi.mocked(markSent).mockResolvedValue(undefined);
+    vi.mocked(getTicket).mockResolvedValue(ticket());
+    vi.mocked(sendWorkOrderEmail).mockResolvedValue('SENT');
+    lineRecipients.mockResolvedValue(['Uaaa', 'Ubbb']);
+    lineSend.mockResolvedValue(true);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  describe('NOTIFICATION_CHANNELS', () => {
+    it('runs every channel when it is unset or empty', () => {
+      expect(selectChannels(undefined)).toEqual(CHANNELS);
+      expect(selectChannels('')).toEqual(CHANNELS);
+      expect(selectChannels(' , ')).toEqual(CHANNELS);
+    });
+
+    it('runs only the channels it names, ignoring spaces and empty entries', () => {
+      expect(selectChannels('LINE_REPORTER').map((c) => c.name)).toEqual([
+        'LINE_REPORTER',
+      ]);
+      expect(selectChannels(' EMAIL_TEAM , ').map((c) => c.name)).toEqual([
+        'EMAIL_TEAM',
+      ]);
+      expect(
+        selectChannels('LINE_REPORTER,EMAIL_TEAM').map((c) => c.name),
+      ).toEqual(['EMAIL_TEAM', 'LINE_REPORTER']);
+    });
+
+    it('rejects a name that matches no channel, and says which', () => {
+      expect(() => selectChannels('LINE_REPORTER,SMS')).toThrow(
+        /unknown channel: SMS\. Known channels: EMAIL_TEAM, LINE_REPORTER, EMAIL_SUPERVISORS, EMAIL_TEAM_WARNING\./,
+      );
+      // case matters: a channel name is part of the notification log keys
+      expect(() => selectChannels('line_reporter')).toThrow('unknown channel');
+    });
+
+    it('lets a LINE-only deployment message the reporters without touching SES', async () => {
+      vi.stubEnv('NOTIFICATION_CHANNELS', 'LINE_REPORTER');
+      // SES is not set up: if it were called, the record would fail
+      vi.mocked(sendWorkOrderEmail).mockRejectedValue(
+        new Error('SES_SENDER_EMAIL environment variable is not set.'),
+      );
+
+      const result = await handler(eventOf(triaged('3')));
+
+      expect(result).toEqual({ batchItemFailures: [] });
+      expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+      expect(lineSend).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(markSent).mock.calls.map((call) => call[2])).toEqual([
+        'LINE_REPORTER:Uaaa',
+        'LINE_REPORTER:Ubbb',
+      ]);
+    });
+
+    it('lets an email-only deployment skip LINE', async () => {
+      vi.stubEnv('NOTIFICATION_CHANNELS', 'EMAIL_TEAM');
+      await handler(eventOf(triaged('3')));
+      expect(sendWorkOrderEmail).toHaveBeenCalledOnce();
+      expect(lineSend).not.toHaveBeenCalled();
+      expect(lineRecipients).not.toHaveBeenCalled();
+    });
+
+    it('still sends no LINE message for an event kind the LINE channel ignores', async () => {
+      vi.stubEnv('NOTIFICATION_CHANNELS', 'LINE_REPORTER');
+      await handler(eventOf(record('PRIORITY_CHANGED', '1')));
+      expect(getTicket).not.toHaveBeenCalled();
+      expect(lineSend).not.toHaveBeenCalled();
+    });
+
+    it('reports a misspelt setting as a failed record and sends nothing', async () => {
+      vi.stubEnv('NOTIFICATION_CHANNELS', 'LINE');
+
+      const result = await handler(eventOf(triaged('4')));
+
+      expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: '4' }] });
+      expect(lineSend).not.toHaveBeenCalled();
+      expect(sendWorkOrderEmail).not.toHaveBeenCalled();
+      // an Error does not show in JSON, so read the message of the logged error
+      const messages = vi
+        .mocked(console.error)
+        .mock.calls.flat()
+        .map((arg) => (arg as { err?: Error })?.err?.message ?? '')
+        .join(' ');
+      expect(messages).toContain('NOTIFICATION_CHANNELS');
+    });
+  });
+
+  describe('a failure in one place', () => {
+    it('does not hold back the LINE messages when the email fails, and the retry sends only the email', async () => {
+      vi.mocked(sendWorkOrderEmail).mockRejectedValue(new Error('SES is down'));
+
+      const first = await handler(eventOf(triaged('10')));
+
+      expect(first).toEqual({ batchItemFailures: [{ itemIdentifier: '10' }] });
+      expect(lineSend).toHaveBeenCalledTimes(2);
+      const recorded = vi.mocked(markSent).mock.calls.map((call) => call[2]);
+      expect(recorded).toEqual(['LINE_REPORTER:Uaaa', 'LINE_REPORTER:Ubbb']);
+
+      // the retry: LINE was recorded, the email now works
+      vi.mocked(hasSent).mockImplementation(async (_t, _e, key) =>
+        recorded.includes(key),
+      );
+      vi.mocked(sendWorkOrderEmail).mockResolvedValue('SENT');
+      lineSend.mockClear();
+
+      const retry = await handler(eventOf(triaged('10')));
+
+      expect(retry).toEqual({ batchItemFailures: [] });
+      expect(lineSend).not.toHaveBeenCalled();
+      expect(vi.mocked(markSent).mock.calls.at(-1)?.[2]).toBe(
+        'EMAIL_TEAM:PLUMBING',
+      );
+    });
+
+    it('does not hold back the email when LINE fails', async () => {
+      lineSend.mockRejectedValue(new Error('LINE is down'));
+
+      const result = await handler(eventOf(triaged('10')));
+
+      expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: '10' }] });
+      expect(vi.mocked(markSent).mock.calls.map((call) => call[2])).toEqual([
+        'EMAIL_TEAM:PLUMBING',
+      ]);
+    });
+
+    it('does not hold back the other reporters when one fails', async () => {
+      lineSend.mockImplementation(async (_ticket, recipient) => {
+        if (recipient === 'Uaaa') throw new Error('LINE is down');
+        return true;
+      });
+
+      const result = await handler(eventOf(created('9')));
+
+      expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: '9' }] });
+      expect(lineSend).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(markSent).mock.calls.map((call) => call[2])).toEqual([
+        'LINE_REPORTER:Ubbb',
+      ]);
+    });
+
+    it('does not hold back the email when the reporters cannot be listed', async () => {
+      lineRecipients.mockRejectedValue(new Error('dynamo down'));
+
+      const result = await handler(eventOf(triaged('8')));
+
+      expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: '8' }] });
+      expect(sendWorkOrderEmail).toHaveBeenCalledOnce();
+      expect(vi.mocked(markSent).mock.calls.map((call) => call[2])).toEqual([
+        'EMAIL_TEAM:PLUMBING',
+      ]);
+    });
+
+    it('reports the first failure when several things fail, so the log shows a cause', async () => {
+      vi.mocked(sendWorkOrderEmail).mockRejectedValue(new Error('SES is down'));
+      lineSend.mockRejectedValue(new Error('LINE is down'));
+      const rec = triaged();
+      delete rec.dynamodb?.SequenceNumber;
+
+      await expect(handler(eventOf(rec))).rejects.toThrow('SES is down');
+      // every place was still tried
+      expect(lineSend).toHaveBeenCalledTimes(2);
+    });
+
+    it('logs each failure with the channel and no LINE user id (SR-35)', async () => {
+      vi.mocked(sendWorkOrderEmail).mockRejectedValue(new Error('SES is down'));
+      lineSend.mockRejectedValue(new Error('LINE is down'));
+
+      await handler(eventOf(triaged('10')));
+
+      const logged = JSON.stringify(vi.mocked(console.error).mock.calls);
+      expect(logged).toContain('EMAIL_TEAM');
+      expect(logged).toContain('LINE_REPORTER');
+      expect(logged).not.toContain('Uaaa');
+      expect(logged).not.toContain('Ubbb');
+    });
   });
 });

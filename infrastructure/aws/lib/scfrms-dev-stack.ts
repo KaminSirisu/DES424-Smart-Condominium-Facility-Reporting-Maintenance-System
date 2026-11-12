@@ -609,6 +609,30 @@ export class ScfrmsDevStack extends Stack {
       for (const t of [tickets, photos, reporters, teams])
         t.grantReadData(notify);
       notifications.grantReadWriteData(notify);
+      notify.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:GetObject'],
+          resources: [
+            `${uploads.bucketArn}/uploads/*`,
+            `${uploads.bucketArn}/thumbnails/*`,
+          ],
+        }),
+      );
+      notify.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:PutObject'],
+          resources: [`${uploads.bucketArn}/thumbnails/*`],
+        }),
+      );
+      notify.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:ListBucket'],
+          resources: [uploads.bucketArn],
+          conditions: {
+            StringLike: { 's3:prefix': ['uploads/*', 'thumbnails/*'] },
+          },
+        }),
+      );
       lineToken.grantRead(notify);
       notify.addToRolePolicy(
         new iam.PolicyStatement({

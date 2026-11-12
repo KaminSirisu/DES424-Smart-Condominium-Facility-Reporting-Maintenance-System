@@ -5,9 +5,12 @@ import {
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { ddb } from './dynamodb-client.js';
+import type { TicketQuotaClaim } from './rate-limit.js';
 import { tableName } from './tables.js';
+import { SLA_REPEAT_MINUTES, TEAM_IDS } from '../triage/policy.js';
 import {
   Priority,
+  SlaAlert,
   StoredTicketPhoto,
   TicketEventRecord,
   TicketRecord,
@@ -178,6 +181,14 @@ export async function getTicket(
   return toTicketRecord(ticket.Item as TicketItem, photos);
 }
 
+/** The reporter has used up the tickets they may create in this hour. */
+export class QuotaExceededError extends Error {
+  constructor(public readonly retryAfterSeconds: number) {
+    super('The ticket creation limit is used up.');
+    this.name = 'QuotaExceededError';
+  }
+}
+
 /**
  * Creates a new ticket together with its reporter association, its photo
  * metadata and its CREATED audit event, all-or-nothing. The ticket Put
@@ -185,50 +196,86 @@ export async function getTicket(
  * cancels the transaction with TransactionCanceledException (reason
  * ConditionalCheckFailed at index 0) — the caller uses this to detect an
  * Idempotency-Key collision and avoid writing a duplicate.
+ *
+ * With a `quota` claim (SR-31, see shared/rate-limit.ts) the reporter's
+ * counter is updated in the same transaction, last. Nothing is counted unless
+ * the ticket is written, and a refused claim throws QuotaExceededError. If the
+ * ticket already exists the original conditional failure is thrown instead, so
+ * a retry of a request that went through still gets its answer.
  */
-export async function createTicket(record: TicketRecord): Promise<void> {
-  await ddb.send(
-    new TransactWriteCommand({
-      TransactItems: [
-        {
-          Put: {
-            TableName: tableName('TICKETS'),
-            Item: toTicketItem(record),
-            ConditionExpression: 'attribute_not_exists(ticketId)',
-          },
-        },
-        {
-          Put: {
-            TableName: tableName('TICKET_REPORTERS'),
-            Item: toReporterItem(record),
-          },
-        },
-        ...record.photos.map((photo) => ({
-          Put: {
-            TableName: tableName('TICKET_PHOTOS'),
-            Item: toPhotoItem(record.id, photo),
-          },
-        })),
-        {
-          Put: {
-            TableName: tableName('TICKET_EVENTS'),
-            Item: toEventItem(toCreatedEvent(record)),
-          },
-        },
-      ],
-    }),
-  );
+export async function createTicket(
+  record: TicketRecord,
+  quota?: TicketQuotaClaim | TicketQuotaClaim[],
+): Promise<void> {
+  const claims = quota === undefined ? [] : [quota].flat();
+  const items = [
+    {
+      Put: {
+        TableName: tableName('TICKETS'),
+        Item: toTicketItem(record),
+        ConditionExpression: 'attribute_not_exists(ticketId)',
+      },
+    },
+    {
+      Put: {
+        TableName: tableName('TICKET_REPORTERS'),
+        Item: toReporterItem(record),
+      },
+    },
+    ...record.photos.map((photo) => ({
+      Put: {
+        TableName: tableName('TICKET_PHOTOS'),
+        Item: toPhotoItem(record.id, photo),
+      },
+    })),
+    {
+      Put: {
+        TableName: tableName('TICKET_EVENTS'),
+        Item: toEventItem(toCreatedEvent(record)),
+      },
+    },
+    ...claims.map((claim) => ({ Update: claim.update })),
+  ];
+
+  try {
+    await ddb.send(new TransactWriteCommand({ TransactItems: items }));
+  } catch (err) {
+    const reasons =
+      (err as { CancellationReasons?: { Code?: string }[] })
+        .CancellationReasons ?? [];
+    if (
+      (err as { name?: string }).name === 'TransactionCanceledException' &&
+      reasons[0]?.Code !== 'ConditionalCheckFailed'
+    ) {
+      // The counters are the last items. The caller may retry when the
+      // longest refusal is over.
+      const firstClaim = items.length - claims.length;
+      const refused = claims.filter(
+        (_, i) => reasons[firstClaim + i]?.Code === 'ConditionalCheckFailed',
+      );
+      if (refused.length > 0) {
+        throw new QuotaExceededError(
+          Math.max(...refused.map((c) => c.retryAfterSeconds)),
+        );
+      }
+    }
+    throw err;
+  }
 }
 
 export interface TriageUpdate {
   category: string;
-  suggestedPriority: Priority;
   priority: Priority;
   teamId: string;
   deadlineAt: string;
   slaPolicyVersion: number;
   /** Set when the safety override (SLA-02) decided the priority. */
   safetyHazard?: string;
+  /**
+   * Set when a manager triaged the ticket by hand (RR-12): `prioritySetBy`
+   * is then STAFF and the event names the manager and the reason.
+   */
+  staff?: { accountId: string; reason?: string };
   /** Time of this update; also the audit event's occurredAt. */
   now: string;
 }
@@ -254,14 +301,17 @@ export async function applyTriage(
     ticketId,
     kind: 'TRIAGED',
     occurredAt: update.now,
-    actorType: 'SYSTEM',
+    actorType: update.staff ? 'STAFF' : 'SYSTEM',
+    ...(update.staff ? { actorStaffId: update.staff.accountId } : {}),
     fromStatus: 'RECEIVED',
     toStatus: 'ASSIGNED',
     toPriority: update.priority,
     toTeamId: update.teamId,
     ...(update.safetyHazard
       ? { note: `SAFETY_OVERRIDE:${update.safetyHazard}` }
-      : {}),
+      : update.staff?.reason
+        ? { note: update.staff.reason }
+        : {}),
   };
 
   await ddb.send(
@@ -274,7 +324,7 @@ export async function applyTriage(
             ConditionExpression: '#status = :received AND #version = :version',
             UpdateExpression:
               'SET #status = :assigned, category = :category, ' +
-              'suggestedPriority = :suggested, priority = :priority, ' +
+              'priority = :priority, ' +
               'teamId = :teamId, deadlineAt = :deadlineAt, ' +
               'slaPolicyVersion = :policy, triagedAt = :now, ' +
               'updatedAt = :now, #version = #version + :one, ' +
@@ -290,14 +340,13 @@ export async function applyTriage(
               ':version': expectedVersion,
               ':one': 1,
               ':category': update.category,
-              ':suggested': update.suggestedPriority,
               ':priority': update.priority,
               ':teamId': update.teamId,
               ':deadlineAt': update.deadlineAt,
               ':policy': update.slaPolicyVersion,
               ':now': update.now,
               ':teamStatusKey': `TEAM#${update.teamId}#STATUS#ASSIGNED`,
-              ':prioritySetBy': 'AI',
+              ':prioritySetBy': update.staff ? 'STAFF' : 'AI',
               ...(update.safetyHazard
                 ? { ':hazard': update.safetyHazard }
                 : {}),
@@ -334,7 +383,7 @@ export interface StatusChange {
  *    (`teamStatusKey`); DONE removes it from the open queue.
  *  - DONE also stores the repair proof photo (TicketPhotos) and `completedAt`,
  *    and puts the ticket in the team's completed list (`teamDoneKey`,
- *    `completedKey`; reopening a ticket must remove both).
+ *    `completedKey`; reopenTicket() removes both).
  *
  * Only succeeds if the ticket is in the expected status at the version that
  * was read. Otherwise it fails with
@@ -377,8 +426,8 @@ export async function changeTicketStatus(
   let update: string;
   if (done) {
     update =
-      'SET #status = :to, completedAt = :now, updatedAt = :now, ' +
-      '#version = #version + :one, teamDoneKey = :teamDoneKey, ' +
+      'SET #status = :to, completedAt = :now, lastCompletedAt = :now, ' +
+      'updatedAt = :now, #version = #version + :one, teamDoneKey = :teamDoneKey, ' +
       'completedKey = :completedKey REMOVE teamStatusKey';
     values[':teamDoneKey'] = `TEAM#${ticket.teamId}`;
     values[':completedKey'] = timeKey(change.now, ticket.id);
@@ -447,6 +496,8 @@ export interface MergeChange {
   /** The canonical ticket's new priority and deadline, only when the merge changes them (SLA-09). */
   priority?: Priority;
   deadlineAt?: string;
+  /** The earlier SLA start the canonical ticket takes from a merged ticket (SLA-09). */
+  slaStartAt?: string;
 }
 
 /** How many items one merge writes: the tickets and their events, plus a reporter link each. */
@@ -520,6 +571,10 @@ export async function mergeTickets(
   if (change.deadlineAt) {
     canonicalUpdate += ', deadlineAt = :deadlineAt';
     canonicalValues[':deadlineAt'] = change.deadlineAt;
+  }
+  if (change.slaStartAt) {
+    canonicalUpdate += ', slaStartAt = :slaStartAt';
+    canonicalValues[':slaStartAt'] = change.slaStartAt;
   }
 
   await ddb.send(
@@ -614,9 +669,14 @@ export interface TicketFilter {
   statuses?: TicketStatus[];
   /** Keep only tickets with exactly this location text. */
   location?: string;
+  /** Leave this ticket out, such as the ticket whose duplicates are asked for. */
+  excludeId?: string;
 }
 
 function matches(ticket: TicketRecord, filter: TicketFilter): boolean {
+  if (filter.excludeId !== undefined && ticket.id === filter.excludeId) {
+    return false;
+  }
   if (filter.statuses && !filter.statuses.includes(ticket.status)) return false;
   if (filter.location !== undefined && ticket.location !== filter.location) {
     return false;
@@ -860,4 +920,623 @@ export async function listCompletedTickets(
     if (!page.LastEvaluatedKey) return { tickets };
   }
   return { tickets, next: upperKey };
+}
+
+function fromEventItem(item: EventItem): TicketEventRecord {
+  return omit(item, ['eventKey']) as unknown as TicketEventRecord;
+}
+
+export interface TicketEventPage {
+  events: TicketEventRecord[];
+  /** The `eventKey` to continue after; absent on the last page. */
+  next?: string;
+}
+
+/**
+ * A ticket's audit events in time order (TicketEvents, strongly consistent).
+ * `after` is the `next` of the previous page. One more event than `limit` is
+ * read to know whether there is a next page, so the last page has no `next`.
+ */
+export async function listTicketEvents(
+  ticketId: string,
+  options: { limit: number; after?: string },
+): Promise<TicketEventPage> {
+  const page = await ddb.send(
+    new QueryCommand({
+      TableName: tableName('TICKET_EVENTS'),
+      KeyConditionExpression: options.after
+        ? 'ticketId = :ticketId AND eventKey > :after'
+        : 'ticketId = :ticketId',
+      ExpressionAttributeValues: {
+        ':ticketId': ticketId,
+        ...(options.after ? { ':after': options.after } : {}),
+      },
+      ConsistentRead: true,
+      ScanIndexForward: true,
+      Limit: options.limit + 1,
+    }),
+  );
+  const items = (page.Items ?? []) as EventItem[];
+  const shown = items.slice(0, options.limit);
+  return {
+    events: shown.map(fromEventItem),
+    ...(items.length > options.limit
+      ? { next: shown[shown.length - 1].eventKey }
+      : {}),
+  };
+}
+
+export interface PriorityChange {
+  to: Priority;
+  /** The staff account that decides; recorded as the actor of the event. */
+  accountId: string;
+  /** The team of a technician account (SR-11); a manager has none. */
+  teamId?: string;
+  now: string;
+  /** Why it changed; required by the endpoint when the priority changes. */
+  reason?: string;
+  /** The new deadline, only when it differs from the current one (SLA-07). */
+  deadlineAt?: string;
+}
+
+/**
+ * A person decides the priority of an open ticket, in one transaction with
+ * the audit event: a different value is PRIORITY_CHANGED, the same value
+ * (accepting what the AI chose) is PRIORITY_CONFIRMED. Either way
+ * `prioritySetBy` becomes STAFF, so the AI never overwrites it.
+ *
+ * Only succeeds if the ticket is still ASSIGNED or IN_PROGRESS at the version
+ * that was read. Otherwise it fails with TransactionCanceledException (reason
+ * ConditionalCheckFailed at index 0).
+ */
+export async function setTicketPriority(
+  ticket: TicketRecord,
+  change: PriorityChange,
+): Promise<void> {
+  const event: TicketEventRecord = {
+    id: `${ticket.id}_priority_v${ticket.version + 1}`,
+    ticketId: ticket.id,
+    kind:
+      ticket.priority === change.to ? 'PRIORITY_CONFIRMED' : 'PRIORITY_CHANGED',
+    occurredAt: change.now,
+    actorType: 'STAFF',
+    actorStaffId: change.accountId,
+    ...(change.teamId ? { actorTeamId: change.teamId } : {}),
+    ...(ticket.priority ? { fromPriority: ticket.priority } : {}),
+    toPriority: change.to,
+    repairCycle: ticket.repairCycle,
+    ...(change.reason ? { note: change.reason } : {}),
+  };
+
+  const values: Record<string, unknown> = {
+    ':assigned': 'ASSIGNED',
+    ':inProgress': 'IN_PROGRESS',
+    ':version': ticket.version,
+    ':one': 1,
+    ':now': change.now,
+    ':priority': change.to,
+    ':staff': 'STAFF',
+  };
+  let update =
+    'SET priority = :priority, prioritySetBy = :staff, updatedAt = :now, ' +
+    '#version = #version + :one';
+  if (change.deadlineAt) {
+    update += ', deadlineAt = :deadlineAt';
+    values[':deadlineAt'] = change.deadlineAt;
+  }
+
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: tableName('TICKETS'),
+            Key: { ticketId: ticket.id },
+            ConditionExpression:
+              '#status IN (:assigned, :inProgress) AND #version = :version',
+            UpdateExpression: update,
+            ExpressionAttributeNames: {
+              '#status': 'status',
+              '#version': 'version',
+            },
+            ExpressionAttributeValues: values,
+          },
+        },
+        {
+          Put: {
+            TableName: tableName('TICKET_EVENTS'),
+            Item: toEventItem(event),
+          },
+        },
+      ],
+    }),
+  );
+}
+
+export interface ReopenChange {
+  now: string;
+  /** A hash of the Idempotency-Key, kept on the ticket to recognise a retry. */
+  reopenKey: string;
+  /** Why the reporter reopens it, when they said. */
+  reason?: string;
+  /** The new deadline: a new resolution clock from `now`, same priority (SLA-10). */
+  deadlineAt?: string;
+}
+
+/**
+ * A reporter reopens a ticket that is DONE (RR-03): it goes back to ASSIGNED,
+ * to the team's open queue and out of the completed list, in one transaction
+ * with a REOPENED audit event.
+ *
+ *  - `repairCycle` goes up by one; the event records the new cycle, and the
+ *    earlier cycle's events and proof photos stay as they were.
+ *  - `completedAt` is removed, the ticket is no longer completed.
+ *  - A new SLA clock starts now (SLA-10): `slaStartAt` is `now` and
+ *    `deadlineAt` is counted from it with the same priority.
+ *
+ * Only succeeds if the ticket is still DONE at the version that was read.
+ * Otherwise it fails with TransactionCanceledException (reason
+ * ConditionalCheckFailed at index 0).
+ */
+export async function reopenTicket(
+  ticket: TicketRecord,
+  change: ReopenChange,
+): Promise<void> {
+  if (!ticket.teamId) throw new Error(`Ticket ${ticket.id} has no team.`);
+
+  const event: TicketEventRecord = {
+    id: `${ticket.id}_reopened_v${ticket.version + 1}`,
+    ticketId: ticket.id,
+    kind: 'REOPENED',
+    occurredAt: change.now,
+    actorType: 'REPORTER',
+    fromStatus: 'DONE',
+    toStatus: 'ASSIGNED',
+    repairCycle: ticket.repairCycle + 1,
+    ...(change.reason ? { note: change.reason } : {}),
+  };
+
+  const values: Record<string, unknown> = {
+    ':done': 'DONE',
+    ':assigned': 'ASSIGNED',
+    ':version': ticket.version,
+    ':one': 1,
+    ':now': change.now,
+    ':cycle': ticket.repairCycle + 1,
+    ':teamStatusKey': `TEAM#${ticket.teamId}#STATUS#ASSIGNED`,
+    ':reopenKey': change.reopenKey,
+  };
+  let update =
+    'SET #status = :assigned, repairCycle = :cycle, updatedAt = :now, ' +
+    '#version = #version + :one, teamStatusKey = :teamStatusKey, ' +
+    'slaStartAt = :now, reopenKey = :reopenKey';
+  if (change.deadlineAt) {
+    update += ', deadlineAt = :deadlineAt';
+    values[':deadlineAt'] = change.deadlineAt;
+  }
+  update +=
+    ' REMOVE completedAt, teamDoneKey, completedKey, slaWarnedAt, ' +
+    'slaResponseBreachedAt, slaBreachedAt, slaBreachAlerts, slaLastBreachAlertAt';
+
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: tableName('TICKETS'),
+            Key: { ticketId: ticket.id },
+            ConditionExpression: '#status = :done AND #version = :version',
+            UpdateExpression: update,
+            ExpressionAttributeNames: {
+              '#status': 'status',
+              '#version': 'version',
+            },
+            ExpressionAttributeValues: values,
+          },
+        },
+        {
+          Put: {
+            TableName: tableName('TICKET_EVENTS'),
+            Item: toEventItem(event),
+          },
+        },
+      ],
+    }),
+  );
+}
+
+export interface ReassignChange {
+  /** The team that takes the ticket. */
+  toTeamId: string;
+  /** The manager that decides; recorded as the actor of the event. */
+  accountId: string;
+  now: string;
+  /** Why the team changes. */
+  reason: string;
+  /** The deadline counted with the new team's policy, only when it differs (SLA-08). */
+  deadlineAt?: string;
+}
+
+/**
+ * A manager moves an ASSIGNED ticket to another team, in one transaction with
+ * the audit event: the ticket leaves the old team's open queue and enters the
+ * new team's (`teamStatusKey`), and a REASSIGNED event records the old team,
+ * the new team, the actor and the reason. Work that has started is not moved.
+ *
+ * Only succeeds if the ticket is still ASSIGNED at the version that was read.
+ * Otherwise it fails with TransactionCanceledException (reason
+ * ConditionalCheckFailed at index 0).
+ */
+export async function reassignTicket(
+  ticket: TicketRecord,
+  change: ReassignChange,
+): Promise<void> {
+  if (!ticket.teamId) throw new Error(`Ticket ${ticket.id} has no team.`);
+
+  const event: TicketEventRecord = {
+    id: `${ticket.id}_reassigned_v${ticket.version + 1}`,
+    ticketId: ticket.id,
+    kind: 'REASSIGNED',
+    occurredAt: change.now,
+    actorType: 'STAFF',
+    actorStaffId: change.accountId,
+    fromTeamId: ticket.teamId,
+    toTeamId: change.toTeamId,
+    repairCycle: ticket.repairCycle,
+    note: change.reason,
+  };
+
+  const values: Record<string, unknown> = {
+    ':assigned': 'ASSIGNED',
+    ':version': ticket.version,
+    ':one': 1,
+    ':now': change.now,
+    ':team': change.toTeamId,
+    ':teamStatusKey': `TEAM#${change.toTeamId}#STATUS#ASSIGNED`,
+  };
+  let update =
+    'SET teamId = :team, teamStatusKey = :teamStatusKey, updatedAt = :now, ' +
+    '#version = #version + :one';
+  if (change.deadlineAt) {
+    update += ', deadlineAt = :deadlineAt';
+    values[':deadlineAt'] = change.deadlineAt;
+  }
+
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: tableName('TICKETS'),
+            Key: { ticketId: ticket.id },
+            ConditionExpression: '#status = :assigned AND #version = :version',
+            UpdateExpression: update,
+            ExpressionAttributeNames: {
+              '#status': 'status',
+              '#version': 'version',
+            },
+            ExpressionAttributeValues: values,
+          },
+        },
+        {
+          Put: {
+            TableName: tableName('TICKET_EVENTS'),
+            Item: toEventItem(event),
+          },
+        },
+      ],
+    }),
+  );
+}
+
+/** The photos of tickets that were read without them (see listTicketsOfMonths). */
+export async function attachPhotos(
+  tickets: TicketRecord[],
+): Promise<TicketRecord[]> {
+  return Promise.all(
+    tickets.map(async (ticket) => ({
+      ...ticket,
+      photos: await getPhotos(ticket.id),
+    })),
+  );
+}
+
+/**
+ * Every ticket created in the given months (`YYYY-MM`), read from
+ * CreatedMonthIndex, which has to project all attributes: the dashboard counts
+ * from these records and does not read the base table. The photos are not
+ * loaded (`photos` is empty; see attachPhotos). Months are read in parallel and
+ * come back in the order given; inside a month the newest ticket comes first.
+ * The index is eventually consistent, which a dashboard accepts.
+ */
+export async function listTicketsOfMonths(
+  months: string[],
+): Promise<TicketRecord[]> {
+  const perMonth = await Promise.all(
+    months.map(async (month) => {
+      const tickets: TicketRecord[] = [];
+      let startKey: Record<string, unknown> | undefined;
+      do {
+        const page = await ddb.send(
+          new QueryCommand({
+            TableName: tableName('TICKETS'),
+            IndexName: 'CreatedMonthIndex',
+            KeyConditionExpression: 'createdMonth = :month',
+            ExpressionAttributeValues: { ':month': month },
+            ScanIndexForward: false,
+            ExclusiveStartKey: startKey,
+          }),
+        );
+        for (const item of page.Items ?? []) {
+          tickets.push(toTicketRecord(item as TicketItem, []));
+        }
+        startKey = page.LastEvaluatedKey;
+      } while (startKey);
+      return tickets;
+    }),
+  );
+  return perMonth.flat();
+}
+
+/**
+ * Every open ticket (ASSIGNED, IN_PROGRESS), oldest deadline first: what the SLA
+ * sweep looks at (SLA-13). One query per team and status on TeamOpenIndex,
+ * which projects every attribute, so nothing else is read. The index is
+ * eventually consistent, which is safe: recordSlaAlert() checks the ticket
+ * again before it writes anything.
+ */
+export async function listOpenTickets(): Promise<TicketRecord[]> {
+  const statuses: OpenStatus[] = ['ASSIGNED', 'IN_PROGRESS'];
+  const perPartition = await Promise.all(
+    TEAM_IDS.flatMap((teamId) =>
+      statuses.map(async (status) => {
+        const tickets: TicketRecord[] = [];
+        let startKey: Record<string, unknown> | undefined;
+        do {
+          const page = await ddb.send(
+            new QueryCommand({
+              TableName: tableName('TICKETS'),
+              IndexName: 'TeamOpenIndex',
+              KeyConditionExpression: 'teamStatusKey = :key',
+              ExpressionAttributeValues: {
+                ':key': `TEAM#${teamId}#STATUS#${status}`,
+              },
+              ExclusiveStartKey: startKey,
+            }),
+          );
+          for (const item of page.Items ?? []) {
+            tickets.push(toTicketRecord(item as TicketItem, []));
+          }
+          startKey = page.LastEvaluatedKey;
+        } while (startKey);
+        return tickets;
+      }),
+    ),
+  );
+  return perPartition
+    .flat()
+    .sort((a, b) =>
+      (a.deadlineAt ?? '') < (b.deadlineAt ?? '')
+        ? -1
+        : (a.deadlineAt ?? '') > (b.deadlineAt ?? '')
+          ? 1
+          : 0,
+    );
+}
+
+/**
+ * Records an SLA alert for a ticket (SLA-14, SLA-15, requirements 3.7): a mark
+ * on the ticket and an audit event, in one transaction. The notification
+ * worker reads the event from the TicketEvents stream and sends the email, so a
+ * failed email is retried there and the alert itself is recorded once.
+ *
+ * | alert                  | event                  | mark on the ticket                              |
+ * | TRIAGE_DELAYED         | SLA_TRIAGE_DELAYED     | `slaTriageDelayedAt`                            |
+ * | WARNING                | SLA_WARNING            | `slaWarnedAt`                                   |
+ * | RESPONSE_BREACH        | SLA_RESPONSE_BREACHED  | `slaResponseBreachedAt`                         |
+ * | RESOLUTION_BREACH      | SLA_BREACHED           | `slaBreachedAt`, `slaBreachAlerts`, `slaLastBreachAlertAt` |
+ *
+ * The write is conditional on what is true now, so two runs at once, a retry,
+ * or a ticket that was just finished, started, re-prioritised or given another
+ * deadline never produce a second or a wrong alert; it returns false then and
+ * the next run looks again. The ticket's version is not raised, so a person
+ * working on the ticket is never refused because of this write.
+ */
+export async function recordSlaAlert(
+  ticket: TicketRecord,
+  alert: SlaAlert,
+  now: Date,
+): Promise<boolean> {
+  const nowIso = now.toISOString();
+  const open = '#status IN (:assigned, :inProgress)';
+  const openValues = { ':assigned': 'ASSIGNED', ':inProgress': 'IN_PROGRESS' };
+  let condition: string;
+  let update: string;
+  let values: Record<string, unknown>;
+  let eventId: string;
+  let kind: string;
+  let note: string;
+
+  if (alert.kind === 'TRIAGE_DELAYED') {
+    kind = 'SLA_TRIAGE_DELAYED';
+    eventId = `${ticket.id}_sla_triage_delayed`;
+    note = 'The ticket was not triaged within the triage delay.';
+    condition =
+      '#status = :received AND attribute_not_exists(slaTriageDelayedAt)';
+    update = 'SET slaTriageDelayedAt = :now';
+    values = { ':received': 'RECEIVED', ':now': nowIso };
+  } else if (alert.kind === 'WARNING') {
+    kind = 'SLA_WARNING';
+    eventId = `${ticket.id}_sla_warning_c${ticket.repairCycle}`;
+    note = 'Seventy-five percent of the resolution time has passed.';
+    condition = `${open} AND attribute_not_exists(slaWarnedAt) AND deadlineAt = :deadline AND deadlineAt > :now`;
+    update = 'SET slaWarnedAt = :now';
+    values = { ...openValues, ':deadline': ticket.deadlineAt, ':now': nowIso };
+  } else if (alert.kind === 'RESPONSE_BREACH') {
+    kind = 'SLA_RESPONSE_BREACHED';
+    eventId = `${ticket.id}_sla_response_c${ticket.repairCycle}`;
+    note = 'The response target passed while the ticket was still ASSIGNED.';
+    condition =
+      '#status = :assigned AND attribute_not_exists(slaResponseBreachedAt) AND priority = :priority';
+    update = 'SET slaResponseBreachedAt = :now';
+    values = {
+      ':assigned': 'ASSIGNED',
+      ':priority': ticket.priority,
+      ':now': nowIso,
+    };
+  } else if (alert.sent === 0) {
+    kind = 'SLA_BREACHED';
+    eventId = `${ticket.id}_sla_breached_c${ticket.repairCycle}_n1`;
+    note = 'The resolution deadline passed.';
+    condition = `${open} AND deadlineAt <= :now AND attribute_not_exists(slaBreachedAt)`;
+    update =
+      'SET slaBreachedAt = :now, slaBreachAlerts = :next, slaLastBreachAlertAt = :now';
+    values = { ...openValues, ':now': nowIso, ':next': 1 };
+  } else {
+    kind = 'SLA_BREACHED';
+    eventId = `${ticket.id}_sla_breached_c${ticket.repairCycle}_n${alert.sent + 1}`;
+    note = `The resolution deadline passed (reminder ${alert.sent}).`;
+    condition = `${open} AND priority = :critical AND slaBreachAlerts = :sent AND slaLastBreachAlertAt <= :cutoff`;
+    update = 'SET slaBreachAlerts = :next, slaLastBreachAlertAt = :now';
+    values = {
+      ...openValues,
+      ':critical': 'CRITICAL',
+      ':sent': alert.sent,
+      ':next': alert.sent + 1,
+      ':now': nowIso,
+      ':cutoff': new Date(
+        now.getTime() - SLA_REPEAT_MINUTES * 60_000,
+      ).toISOString(),
+    };
+  }
+
+  const event: TicketEventRecord = {
+    id: eventId,
+    ticketId: ticket.id,
+    kind,
+    occurredAt: nowIso,
+    actorType: 'SYSTEM',
+    repairCycle: ticket.repairCycle,
+    note,
+  };
+
+  try {
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: tableName('TICKETS'),
+              Key: { ticketId: ticket.id },
+              ConditionExpression: condition,
+              UpdateExpression: update,
+              ExpressionAttributeNames: { '#status': 'status' },
+              ExpressionAttributeValues: values,
+            },
+          },
+          {
+            Put: {
+              TableName: tableName('TICKET_EVENTS'),
+              Item: toEventItem(event),
+            },
+          },
+        ],
+      }),
+    );
+    return true;
+  } catch (err) {
+    const e = err as {
+      name?: string;
+      CancellationReasons?: { Code?: string }[];
+    };
+    if (
+      e?.name === 'TransactionCanceledException' &&
+      e.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed'
+    ) {
+      return false;
+    }
+    throw err;
+  }
+}
+
+/**
+ * The tickets of `months` (UTC `YYYY-MM`, oldest first) that are still
+ * RECEIVED, in creation order: CreatedMonthIndex has no status in its key, so
+ * every ticket of the months is read and the status is filtered. `after` is
+ * the `createdKey` to continue after.
+ */
+async function* receivedItems(
+  months: string[],
+  after?: string,
+): AsyncGenerator<TicketItem> {
+  for (const month of months) {
+    if (after !== undefined && month < after.slice(0, 7)) continue;
+    const continuing = after !== undefined && month === after.slice(0, 7);
+    let startKey: Record<string, unknown> | undefined;
+    do {
+      const page = await ddb.send(
+        new QueryCommand({
+          TableName: tableName('TICKETS'),
+          IndexName: 'CreatedMonthIndex',
+          KeyConditionExpression: continuing
+            ? 'createdMonth = :month AND createdKey > :after'
+            : 'createdMonth = :month',
+          FilterExpression: '#status = :received',
+          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeValues: {
+            ':month': month,
+            ':received': 'RECEIVED',
+            ...(continuing ? { ':after': after } : {}),
+          },
+          ExclusiveStartKey: startKey,
+        }),
+      );
+      for (const item of page.Items ?? []) yield item as TicketItem;
+      startKey = page.LastEvaluatedKey;
+    } while (startKey);
+  }
+}
+
+/**
+ * A page of the tickets waiting for a manager's triage, oldest first (see
+ * tickets/triage-queue.ts). `next` is the `createdKey` of the last ticket of
+ * the page, present only when there is more. A ticket that was triaged between
+ * the index read and the read of the ticket is left out, so a page can be
+ * shorter than `limit`.
+ */
+export async function listReceivedTickets(
+  months: string[],
+  options: { limit: number; after?: string },
+): Promise<TicketListPage<string>> {
+  const items: TicketItem[] = [];
+  for await (const item of receivedItems(months, options.after)) {
+    items.push(item);
+    // One more than the page, to know whether there is a next page.
+    if (items.length > options.limit) break;
+  }
+  const page = items.slice(0, options.limit);
+  const loaded = await loadTickets(page.map((item) => item.ticketId));
+  const tickets = page
+    .map((item) => loaded.get(item.ticketId))
+    .filter(
+      (ticket): ticket is TicketRecord =>
+        ticket !== undefined && ticket.status === 'RECEIVED',
+    );
+  return items.length > options.limit
+    ? { tickets, next: page[page.length - 1].createdKey }
+    : { tickets };
+}
+
+/**
+ * Every RECEIVED ticket of `months`, from the index alone (no photos): what
+ * the SLA sweep looks at for tickets that wait too long for triage.
+ */
+export async function listAllReceivedTickets(
+  months: string[],
+): Promise<TicketRecord[]> {
+  const tickets: TicketRecord[] = [];
+  for await (const item of receivedItems(months)) {
+    tickets.push(toTicketRecord(item, []));
+  }
+  return tickets;
 }
