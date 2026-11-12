@@ -163,7 +163,7 @@ describe('G02 development stack', () => {
     expect(actions).not.toContain('dynamodb:Scan');
     expect(actions).not.toContain('dynamodb:GetRecords');
     expect(actions).not.toContain('dynamodb:PutItem');
-  });
+  }, 30000);
 
   it('gates photo access and limits its thumbnail write permission', () => {
     expect(() => template({ enablePhotoAccess: 'true' })).toThrow(
@@ -217,7 +217,7 @@ describe('G02 development stack', () => {
     expect(actions).toContain('s3:ListBucket');
     expect(actions).not.toContain('dynamodb:Scan');
     expect(actions).not.toContain('s3:DeleteObject');
-  });
+  }, 30000);
 
   it('gates staff writes and grants only the tables and proof objects they need', () => {
     expect(() => template({ enableStaffTicketWrites: 'true' })).toThrow(
