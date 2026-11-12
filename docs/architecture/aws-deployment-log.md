@@ -229,6 +229,11 @@ in CloudShell; the test still completed successfully.
 
 - A different-reporter denial check needs a second LINE account. Deploy and
   test the remaining staff write routes and reporter reopen.
+- With that second account's fresh ID token set privately as `LINE_ID_TOKEN`,
+  run `npm run test:smoke:reporter-isolation -- tkt_f0be93a07f6e43e8286e06189d`.
+  The script checks that the ticket exists and that this LINE user is not
+  associated with it before asserting HTTP 404 for detail and absence from
+  the reporter list. Do not record or share the token.
 - Seed Teams records and the other shared team accounts when their names and
   notification email addresses are agreed.
 - Use a team-owned sender domain, verify it as an SES identity in Singapore,
