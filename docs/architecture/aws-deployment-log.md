@@ -206,10 +206,19 @@ The first test ticket had already passed the same transition earlier; this is
 the first recorded run after notifications were enabled. The technician
 password, staff token and LINE channel access token were not recorded.
 
+An ELECTRICAL intake smoke test created ticket
+`tkt_68acac20ba6835175fd47c95a4` with initial status `RECEIVED`; the user
+reported an assignment LINE message and a team work-order email. The first
+cross-team access script run passed with the literal placeholder
+`NEW_ELECTRICAL_TICKET_ID`, so its 404 checked a nonexistent ticket and is **not
+valid authorization evidence**. The script now checks DynamoDB for the actual
+other-team ticket before making the API access assertions. Rerun it with the
+real ID before claiming that cross-team detail access passed.
+
 ## Next deployment gates
 
-- A cross-team ticket-detail check needs a known ticket assigned to another
-  team. A different-reporter denial check needs a second LINE account. Deploy
+- Rerun the cross-team ticket-detail check with the real ELECTRICAL ticket ID
+  above. A different-reporter denial check needs a second LINE account. Deploy
   and test the remaining staff write routes and reporter reopen.
 - Seed Teams records and the other shared team accounts when their names and
   notification email addresses are agreed.

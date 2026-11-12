@@ -1,15 +1,41 @@
+import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
+
 const baseUrl =
   process.env.API_BASE_URL ??
   'https://h5ekgxy0j7.execute-api.ap-southeast-1.amazonaws.com/v1';
+const ticketTable =
+  process.env.TICKETS_TABLE_NAME ?? 'des424-g02-scfrms-dev-Tickets';
 const email = process.env.STAFF_EMAIL;
 const password = process.env.STAFF_PASSWORD;
 const [ownTicketId, otherTicketId, otherTeamId] = process.argv.slice(2);
 
 if (!email || !password || !ownTicketId || !otherTicketId || !otherTeamId) {
   console.error(
-    'Set technician STAFF_EMAIL and STAFF_PASSWORD privately, then run npm run test:smoke:cross-team-detail -- <own-ticket-id> <other-ticket-id> <other-team-id>. Confirm the other ticket exists and belongs to that team before running.',
+    'Set technician STAFF_EMAIL and STAFF_PASSWORD privately, then run npm run test:smoke:cross-team-detail -- <own-ticket-id> <other-ticket-id> <other-team-id>. AWS read access to the Tickets table is required.',
   );
   process.exit(2);
+}
+
+// A nonexistent ticket also returns 404 to staff. Verify the fixture directly
+// so a typo or an unchanged placeholder cannot make the access test pass.
+const dynamodb = new DynamoDBClient({
+  region: process.env.AWS_REGION ?? 'ap-southeast-1',
+});
+const otherItem = await dynamodb.send(
+  new GetItemCommand({
+    TableName: ticketTable,
+    Key: { ticketId: { S: otherTicketId } },
+    ConsistentRead: true,
+    ProjectionExpression: 'ticketId,teamId',
+  }),
+);
+if (
+  otherItem.Item?.ticketId?.S !== otherTicketId ||
+  otherItem.Item.teamId?.S !== otherTeamId
+) {
+  throw new Error(
+    `The other ticket must exist in ${ticketTable} and be assigned to ${otherTeamId}; check the ticket ID and triage result.`,
+  );
 }
 
 async function responseJson(response, expected, step) {
