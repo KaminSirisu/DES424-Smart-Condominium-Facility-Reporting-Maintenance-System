@@ -1,7 +1,10 @@
 import { type ChangeEvent, useEffect, useId, useState } from 'react';
 import camera from '../assets/camera.png';
-
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
+import {
+  ALLOWED_IMAGE_TYPES,
+  MAX_IMAGE_BYTES,
+  isAllowedImageType,
+} from '../services/api';
 
 type ImageUploadProps = {
   file: File | null;
@@ -28,11 +31,12 @@ export default function ImageUpload({ file, onChange }: ImageUploadProps) {
     event.target.value = '';
     if (!selectedFile) return;
 
-    if (!selectedFile.type.startsWith('image/')) {
-      setError('Please select an image file.');
+    // The backend accepts only JPEG and PNG (HEIC and WebP are rejected).
+    if (!isAllowedImageType(selectedFile.type)) {
+      setError('Please choose a JPEG or PNG photo.');
       return;
     }
-    if (selectedFile.size > MAX_IMAGE_SIZE) {
+    if (selectedFile.size > MAX_IMAGE_BYTES) {
       setError(
         'Image is too large. Please select an image smaller than 10 MB.',
       );
@@ -95,7 +99,8 @@ export default function ImageUpload({ file, onChange }: ImageUploadProps) {
         // Use inputId to reference to button Change photo and Take / Upload Photo from input(id) -> label(htmlFor)
         id={inputId}
         type="file"
-        accept="image/*"
+        // Listing exact types makes iPhone convert camera photos to JPEG instead of HEIC.
+        accept={ALLOWED_IMAGE_TYPES.join(',')}
         onChange={handleChange}
         className="sr-only"
       />

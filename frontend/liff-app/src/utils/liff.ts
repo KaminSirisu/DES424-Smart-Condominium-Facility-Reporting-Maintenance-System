@@ -38,3 +38,32 @@ export function initLiff(): Promise<LiffMode> {
     .then(() => 'liff');
   return initPromise;
 }
+
+// Returns a fresh LINE ID token for calling the backend API.
+// The backend verifies this token with LINE and takes the reporter's identity
+// from it, so the app never sends a LINE user ID itself.
+export async function getLineIdToken(): Promise<string> {
+  const mode = await initLiff();
+  if (mode === 'dev') {
+    throw new Error('Open this page in LINE to submit a report.');
+  }
+
+  // null when the user is not logged in or the LIFF app lacks the openid scope.
+  const token = liff.getIDToken();
+  if (!token) {
+    throw new Error(
+      'Could not get your LINE login. Please close this page and open it again from LINE.',
+    );
+  }
+
+  // The ID token lasts about one hour. A page left open longer holds an
+  // expired token, which the backend would reject with 401.
+  const decoded = liff.getDecodedIDToken();
+  if (decoded?.exp && decoded.exp * 1000 <= Date.now()) {
+    throw new Error(
+      'Your LINE session has expired. Please close this page and open it again from LINE.',
+    );
+  }
+
+  return token;
+}
