@@ -66,7 +66,7 @@ Private Fargate tasks need outbound connectivity for pulling images and calling 
 
 ## Current decision
 
-The CDK stack under `infrastructure/aws` is a low-cost development slice, **not** an ECS implementation. Its foundation was deployed in G02 Singapore on 2026-11-07 with eight DynamoDB tables, a private upload bucket, a placeholder LINE secret, and API Gateway → Lambda health endpoint. Reporter intake, the Tickets stream triage worker, staff login, staff ticket reads, technician status changes, and repair-proof uploads have passed live smoke tests. The TicketEvents notification worker remains disabled. The team is asking whether a staff portal container qualifies for the course bonus while the backend stays on Lambda. The [AWS deployment log](aws-deployment-log.md) records the as-built evidence.
+The CDK stack under `infrastructure/aws` is a low-cost development slice, **not** an ECS implementation. Its foundation was deployed in G02 Singapore on 2026-11-07 with eight DynamoDB tables, a private upload bucket, an initially placeholder LINE secret (later replaced), and API Gateway → Lambda health endpoint. Reporter intake, the Tickets stream triage worker, staff login, staff ticket reads, technician status changes, repair-proof uploads, LINE notifications, and a PLUMBING team work-order email have passed live smoke tests. The email reached Gmail Spam. The team is asking whether a staff portal container qualifies for the course bonus while the backend stays on Lambda. The [AWS deployment log](aws-deployment-log.md) records the as-built evidence.
 
 ## Recommendation for the current stage
 
