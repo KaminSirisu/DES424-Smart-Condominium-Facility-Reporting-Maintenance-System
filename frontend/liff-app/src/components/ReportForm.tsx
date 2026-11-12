@@ -1,12 +1,21 @@
-import { useState, useId, type FormEvent } from 'react';
+import { useState, useId, useRef, type FormEvent } from 'react';
 import ImageUpload from './ImageUpload';
 import SubmitButton from './SubmitButton';
-import { submitReport } from '../services/api';
+import {
+  submitErrorMessage,
+  submitReport,
+  type SubmitAttempt,
+  type Ticket,
+} from '../services/api';
 import check from '../assets/check.png';
 
 const MAX_LOCATION_LENGTH = 100;
 const MIN_DESCRIPTION_LENGTH = 10;
 const MAX_DESCRIPTION_LENGTH = 500;
+
+function newAttempt(): SubmitAttempt {
+  return { idempotencyKey: crypto.randomUUID() };
+}
 
 type FormErrors = {
   location?: string;
@@ -23,18 +32,24 @@ export default function ReportForm() {
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [submitted, setSubmitted] = useState(false);
+  const [ticket, setTicket] = useState<Ticket | null>(null);
+  // Same attempt is reused when Submit is pressed again after an error,
+  // and replaced as soon as the report itself changes.
+  const attemptRef = useRef<SubmitAttempt>(newAttempt());
 
   function handleLocationChange(value: string) {
     setLocation(value);
+    attemptRef.current = newAttempt();
     setErrors((prev) => ({ ...prev, location: undefined }));
   }
   function handleImageChange(file: File | null) {
     setImage(file);
+    attemptRef.current = newAttempt();
     setErrors((prev) => ({ ...prev, image: undefined }));
   }
   function handleDescriptionChange(value: string) {
     setDescription(value);
+    attemptRef.current = newAttempt();
     setErrors((prev) => ({ ...prev, description: undefined }));
   }
   function validateForm(): FormErrors {
@@ -67,15 +82,19 @@ export default function ReportForm() {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await submitReport({
-        location: location.trim(),
-        image,
-        description: description.trim(),
-      });
-      setSubmitted(true);
+      const created = await submitReport(
+        {
+          location: location.trim(),
+          image,
+          description: description.trim(),
+        },
+        attemptRef.current,
+      );
+      attemptRef.current = newAttempt();
+      setTicket(created);
     } catch (error) {
       console.error('Error submitting report:', error);
-      setSubmitError('Could not send your report. Please try again.');
+      setSubmitError(submitErrorMessage(error));
     } finally {
       setSubmitting(false);
     }
@@ -86,16 +105,23 @@ export default function ReportForm() {
     setImage(null);
     setDescription('');
     setErrors({});
-    setSubmitted(false);
+    setSubmitError(null);
+    setTicket(null);
+    attemptRef.current = newAttempt();
   }
 
-  if (submitted) {
+  if (ticket) {
     return (
       <div className="space-y-4 rounded-lg bg-white p-6 text-center">
         <div aria-hidden="true">
           <img src={check} alt="" className="mx-auto h-15 w-15" />
         </div>
         <p className="font-semibold">Report submitted</p>
+        <p className="text-sm text-slate-600">
+          Ticket ID: <span className="font-mono">{ticket.id}</span>
+          <br />
+          Status: {ticket.status === 'RECEIVED' ? 'Received' : ticket.status}
+        </p>
         <p className="text-sm text-slate-600">
           Thank you. Our maintenance team will take a look.
         </p>
