@@ -316,5 +316,80 @@ describe('G02 development stack', () => {
       MaximumRetryAttempts: 3,
       StartingPosition: 'LATEST',
     });
+    const notifyPolicies = Object.entries(
+      t.findResources('AWS::IAM::Policy'),
+    ).filter(([id]) => id.startsWith('NotifyServiceRole'));
+    const notifyActions = notifyPolicies.flatMap(([, policy]) =>
+      policy.Properties.PolicyDocument.Statement.flatMap(
+        (statement: { Action: string | string[] }) =>
+          Array.isArray(statement.Action)
+            ? statement.Action
+            : [statement.Action],
+      ),
+    );
+    expect(notifyActions).toContain('dynamodb:Scan');
   });
+
+  it('wires the complete API and scheduled SLA sweep only when enabled', () => {
+    const t = template({
+      lineLoginChannelId: '1234567890',
+      enableStaffAuth: 'true',
+      enableStaffTicketReads: 'true',
+      enableStaffTicketWrites: 'true',
+      enablePhotoAccess: 'true',
+      enableExtendedApi: 'true',
+      enableSlaSweep: 'true',
+    });
+    t.resourceCountIs('AWS::ApiGatewayV2::Route', 24);
+    t.resourceCountIs('AWS::DynamoDB::Table', 9);
+    t.resourceCountIs('AWS::SecretsManager::Secret', 3);
+    t.hasResourceProperties('AWS::SecretsManager::Secret', {
+      Name: 'des424-g02-scfrms-dev/mfa-encryption-key',
+      GenerateSecretString: {
+        PasswordLength: 43,
+        ExcludePunctuation: true,
+      },
+    });
+    t.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'des424-g02-scfrms-dev-AccountEvents',
+      KeySchema: [
+        { AttributeName: 'accountId', KeyType: 'HASH' },
+        { AttributeName: 'eventKey', KeyType: 'RANGE' },
+      ],
+    });
+    t.hasResourceProperties('AWS::Events::Rule', {
+      ScheduleExpression: 'rate(5 minutes)',
+      State: 'ENABLED',
+    });
+    for (const routeKey of [
+      'POST /v1/tickets/{ticketId}/reopen',
+      'POST /v1/tickets/{ticketId}/merge',
+      'PATCH /v1/tickets/{ticketId}/triage',
+      'GET /v1/dashboard/summary',
+      'POST /v1/auth/staff/mfa/verify',
+      'PATCH /v1/staff-accounts/{accountId}',
+    ]) {
+      t.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: routeKey,
+      });
+    }
+    t.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'des424-g02-scfrms-dev-reopenticket',
+      Environment: {
+        Variables: Match.objectLike({
+          LINE_LOGIN_CHANNEL_ID: '1234567890',
+          STAFF_JWT_SECRET_ARN: Match.absent(),
+        }),
+      },
+    });
+    t.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'des424-g02-scfrms-dev-mfaverify',
+      Environment: {
+        Variables: Match.objectLike({
+          MFA_ENCRYPTION_KEY_ARN: Match.anyValue(),
+          ACCOUNT_EVENTS_TABLE_NAME: Match.anyValue(),
+        }),
+      },
+    });
+  }, 30000);
 });

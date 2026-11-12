@@ -1,5 +1,27 @@
 # G02 development stack
 
+## Extended backend deployment (PR #11)
+
+This branch adds the 15 remaining OpenAPI routes behind
+`-c enableExtendedApi=true`: reporter reopen, staff ticket management,
+dashboards, manager MFA, and staff accounts. It creates the `AccountEvents`
+table and a Secrets Manager MFA encryption key when that flag is enabled.
+The revised login also needs `RateLimits` access, and the revised ticket list
+needs `CreatedMonthIndex` access; both permissions are included.
+
+Preserve every context flag already used in the deployed stack when running
+`infra:diff` and `infra:deploy`. Add `enableExtendedApi=true` only after the
+backend PR is merged or checked out with this IaC. Review the diff before
+deployment. The existing manager login smoke script expects a direct session
+and must be updated for MFA enrollment and verification. The frontend must
+also implement the manager MFA screens.
+
+The five-minute SLA worker is a **separate** `-c enableSlaSweep=true` flag.
+Enable it after reviewing existing open tickets: its first run can create
+alerts for tickets that already crossed an SLA threshold. The notification
+worker now reads active manager accounts for supervisor email. SES sandbox
+recipients still need verified email identities.
+
 The CDK stack and its CloudFormation asset-bucket template target only AWS account `528301714999` in `ap-southeast-1`. The foundation was deployed on 2026-11-07 from `infrastructure/scfrms-dev-stack`. Run commands from the repository root.
 
 The development stack now serves health, reporter intake, AI triage, staff
