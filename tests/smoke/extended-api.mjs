@@ -227,7 +227,8 @@ async function inspect(canonicalId, sourceId) {
     events.every(
       (event, index) =>
         index === 0 ||
-        Date.parse(events[index - 1].occurredAt) <= Date.parse(event.occurredAt),
+        Date.parse(events[index - 1].occurredAt) <=
+          Date.parse(event.occurredAt),
     ),
     'M1: audit events were not returned oldest first.',
   );
