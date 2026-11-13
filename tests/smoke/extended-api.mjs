@@ -1,4 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { appendFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const baseUrl =
   process.env.API_BASE_URL ??
@@ -6,6 +10,46 @@ const baseUrl =
 const [mode, ...args] = process.argv.slice(2);
 const execute = args.includes('--execute');
 const values = args.filter((arg) => arg !== '--execute');
+const logFile =
+  process.env.SCFRMS_SMOKE_LOG ?? join(homedir(), 'scfrms-smoke-results.jsonl');
+const caseLabels = {
+  inspect: ['M1', 'M2'],
+  priority: ['M3'],
+  assignment: ['M4'],
+  merge: ['M5'],
+  dashboard: ['M6'],
+  accounts: ['M7', 'M8'],
+  triage: ['M9'],
+};
+
+function recordResult(result, detail, cases = caseLabels[mode]) {
+  let commit = 'unknown';
+  try {
+    commit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    // The smoke result still matters outside a Git checkout.
+  }
+  const entry = {
+    at: new Date().toISOString(),
+    commit,
+    cases,
+    mode,
+    fixtures: mode === 'accounts' ? ['test account redacted'] : values,
+    result,
+    detail,
+  };
+  try {
+    appendFileSync(logFile, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+    console.log(`Evidence appended to ${logFile}`);
+  } catch (error) {
+    console.error(
+      `Could not save smoke evidence to ${logFile}: ${error instanceof Error ? error.message : 'unknown error'}`,
+    );
+  }
+}
 
 const usage = `Remaining live API smoke checks (M1-M9):
   npm run test:smoke:extended -- inspect <canonical-id> <source-id>       M1, M2; read only
@@ -521,7 +565,7 @@ async function triage(id, teamId, targetPriority) {
     console.log(
       'M9 success path remains pending until a genuine RECEIVED ticket is available.',
     );
-    return;
+    return 'GUARD_PASS';
   }
   const updated = await request(ticketPath(id, '/triage'), options);
   assert(
@@ -550,8 +594,35 @@ const actions = {
   triage,
 };
 try {
-  await actions[mode](...values);
+  const outcome = await actions[mode](...values);
+  if (mode === 'inspect') {
+    recordResult('PASS', 'Paged ticket history readable and ordered.', ['M1']);
+    recordResult('PASS', 'Both open tickets suggest each other.', ['M2']);
+  } else if (mode === 'accounts') {
+    recordResult(
+      'PASS',
+      'Test account created; temporary password returned but not logged.',
+      ['M7'],
+    );
+    recordResult(
+      'PASS',
+      'Test account deactivated and account list excludes secrets.',
+      ['M8'],
+    );
+  } else if (outcome === 'GUARD_PASS') {
+    recordResult(
+      'GUARD_PASS',
+      'Already-assigned ticket returned 409; RECEIVED success path remains pending.',
+    );
+  } else {
+    recordResult(
+      'PASS',
+      `${caseLabels[mode].join('/')} API smoke check passed.`,
+    );
+  }
 } catch (error) {
-  console.error(error instanceof Error ? error.message : 'Smoke check failed.');
+  const detail = error instanceof Error ? error.message : 'Smoke check failed.';
+  console.error(detail);
+  recordResult('FAIL', detail);
   process.exitCode = 1;
 }

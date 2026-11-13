@@ -6,6 +6,10 @@ dashboard. It prompts for a password when `STAFF_PASSWORD` is absent and for a
 fresh six-digit MFA code on each manager login. It does not print tokens, codes,
 or the one-time password returned by account creation. `--execute` is required
 for every command that changes data. Only use disposable tickets for mutations.
+Each command appends a timestamped PASS, FAIL, or GUARD_PASS record to
+`~/scfrms-smoke-results.jsonl` (or `SCFRMS_SMOKE_LOG` if set). The file is local
+to CloudShell and contains no credentials. Copy reviewed results into
+[`LIVE-RESULTS.md`](LIVE-RESULTS.md) for the shared evidence record.
 
 Until this test branch is merged, fetch it in CloudShell. After the merge, use
 the latest `main` instead. The two Building Equipment reports from 2026-11-13
