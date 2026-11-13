@@ -681,7 +681,7 @@ export class ScfrmsDevStack extends Stack {
           'handlers/get-dashboard-history-entry.ts',
           apigwv2.HttpMethod.GET,
           '/dashboard/history',
-          { read: [accounts, tickets], indexes: [createdIndex] },
+          { read: [accounts, tickets, photos], indexes: [createdIndex] },
         );
         route(
           'MfaEnroll',

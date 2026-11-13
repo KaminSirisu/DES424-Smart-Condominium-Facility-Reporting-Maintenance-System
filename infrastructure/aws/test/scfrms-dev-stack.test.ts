@@ -391,12 +391,13 @@ describe('G02 development stack', () => {
         }),
       },
     });
-    // getTicket() reads photo metadata for every ticket mutation, including reopen.
+    // These handlers read photo metadata when returning a ticket or history row.
     for (const name of [
       'SetPriority',
       'TriageTicket',
       'ReassignTicket',
       'ReopenTicket',
+      'DashboardHistory',
     ]) {
       const policies = Object.entries(
         t.findResources('AWS::IAM::Policy'),
