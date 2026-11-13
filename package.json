@@ -17,7 +17,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run",
+    "test": "vitest run --maxWorkers=4",
     "test:smoke:intake": "node tests/smoke/intake.mjs",
     "test:smoke:reporter-upload": "node tests/smoke/reporter-upload.mjs",
     "test:smoke:reporter-ticket-read": "node tests/smoke/reporter-ticket-read.mjs",
