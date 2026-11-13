@@ -4,7 +4,8 @@ import { MapPin, X } from 'lucide-react';
 import { api, errorMessage } from '../services/api';
 import { useApi } from '../hooks/useApi';
 import { useNow } from '../hooks/useNow';
-import { PRIORITIES, STATUS_LABEL, TEAMS } from '../lib/constants';
+import { eventLabel } from '../lib/events';
+import { PRIORITIES, TEAMS } from '../lib/constants';
 import {
   actorLabel,
   formatDateTime,
@@ -14,47 +15,11 @@ import {
   teamLabel,
 } from '../lib/format';
 import { PriorityBadge, StatusBadge } from './Badges';
+import PhotoPreview from './PhotoPreview';
 import type { Priority, TicketEvent } from '../services/types';
-import { DrawerSkeleton, Skeleton, TimelineSkeleton } from './Skeleton';
+import { DrawerSkeleton, TimelineSkeleton } from './Skeleton';
 
 type Props = { ticketId: string; onClose: () => void; onSaved: () => void };
-
-function eventLabel(e: TicketEvent): string {
-  switch (e.kind) {
-    case 'CREATED':
-      return 'Report received via LINE';
-    case 'TRIAGED':
-      return `${actorLabel(e)} triage${e.toTeamId ? `: ${teamLabel(e.toTeamId)}` : ''}${
-        e.toPriority ? ` · ${e.toPriority}` : ''
-      }`;
-    case 'STATUS_CHANGED':
-      return `Status: ${e.fromStatus ? STATUS_LABEL[e.fromStatus] : '?'} → ${
-        e.toStatus ? STATUS_LABEL[e.toStatus] : '?'
-      }`;
-    case 'PRIORITY_CHANGED':
-      return `Priority ${e.fromPriority} → ${e.toPriority}`;
-    case 'PRIORITY_CONFIRMED':
-      return `Priority ${e.toPriority} confirmed`;
-    case 'REASSIGNED':
-      return `Reassigned ${teamLabel(e.fromTeamId)} → ${teamLabel(e.toTeamId)}`;
-    case 'DUPLICATES_MERGED':
-      return 'Merged duplicate tickets';
-    case 'MERGED':
-      return 'Merged into another ticket';
-    case 'REOPENED':
-      return `Reopened by resident (cycle ${e.repairCycle})`;
-    case 'SLA_WARNING':
-      return 'SLA warning: 75% of time used';
-    case 'SLA_RESPONSE_BREACHED':
-      return 'Response target missed';
-    case 'SLA_BREACHED':
-      return 'SLA breached';
-    case 'SLA_TRIAGE_DELAYED':
-      return 'Triage delayed';
-    default:
-      return e.kind;
-  }
-}
 
 /** Who to show next to an event. Reporter and SLA/system events need no name. */
 function eventActor(e: TicketEvent): string | null {
@@ -63,22 +28,8 @@ function eventActor(e: TicketEvent): string | null {
   return e.actorType === 'STAFF' ? actorLabel(e) : null;
 }
 
-function PhotoPreview({ ticketId, photoId }: { ticketId: string; photoId: string }) {
-  const photo = useApi(() => api.getPhotoAccess(ticketId, photoId), photoId);
-  if (photo.error) {
-    return (
-      <div className="flex h-40 items-center justify-center rounded-xl bg-slate-100 text-sm text-slate-400">
-        {photo.error}
-      </div>
-    );
-  }
-  if (!photo.data) return <Skeleton className="h-40 w-full rounded-xl" />;
-  return (
-    <img src={photo.data.url} alt="Reporter photo" className="max-h-64 w-full rounded-xl object-cover" />
-  );
-}
-
-const field = 'rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 disabled:bg-slate-50';
+const field =
+  'rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 disabled:bg-slate-50';
 
 export default function TicketDrawer({ ticketId, onClose, onSaved }: Props) {
   const now = useNow();
@@ -109,7 +60,8 @@ export default function TicketDrawer({ ticketId, onClose, onSaved }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const canEditPriority = t?.status === 'ASSIGNED' || t?.status === 'IN_PROGRESS';
+  const canEditPriority =
+    t?.status === 'ASSIGNED' || t?.status === 'IN_PROGRESS';
   const canReassign = t?.status === 'ASSIGNED';
   const priorityChanged = !!t && priority !== '' && priority !== t.priority;
   const teamChanged = !!t && teamId !== '' && teamId !== t.teamId;
@@ -125,7 +77,8 @@ export default function TicketDrawer({ ticketId, onClose, onSaved }: Props) {
     setSaveError(null);
     try {
       if (teamChanged) await api.reassign(t.id, teamId, reason.trim());
-      if (priorityChanged && priority) await api.setPriority(t.id, priority, reason.trim());
+      if (priorityChanged && priority)
+        await api.setPriority(t.id, priority, reason.trim());
       ticket.reload();
       events.reload();
       onSaved();
@@ -167,24 +120,38 @@ export default function TicketDrawer({ ticketId, onClose, onSaved }: Props) {
               </p>
             </div>
 
-            {defectPhoto && <PhotoPreview ticketId={t.id} photoId={defectPhoto.id} />}
+            {defectPhoto && (
+              <PhotoPreview
+                ticketId={t.id}
+                photoId={defectPhoto.id}
+                alt="Reporter photo"
+              />
+            )}
 
             {t.priority && (
               <div className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs">
-                <b>Set by {prioritySetByLabel(t, events.data?.items)}</b> · {teamLabel(t.teamId)} ·{' '}
-                {t.priority}
+                <b>Set by {prioritySetByLabel(t, events.data?.items)}</b> ·{' '}
+                {teamLabel(t.teamId)} · {t.priority}
               </div>
             )}
 
             <div className="flex flex-wrap items-center gap-2 text-sm">
-              Status <StatusBadge status={t.status} /> · <PriorityBadge priority={t.priority} />
-              {sla && <span className={sla.overdue ? 'text-red-600' : ''}>· SLA {sla.text}</span>}
+              Status <StatusBadge status={t.status} /> ·{' '}
+              <PriorityBadge priority={t.priority} />
+              {sla && (
+                <span className={sla.overdue ? 'text-red-600' : ''}>
+                  · SLA {sla.text}
+                </span>
+              )}
             </div>
 
             {t.status === 'RECEIVED' ? (
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm">
                 The AI could not classify this report, so it has no team yet.{' '}
-                <Link to="/triage" className="font-medium text-orange-600 underline">
+                <Link
+                  to="/triage"
+                  className="font-medium text-orange-600 underline"
+                >
                   Assign it on the Needs triage page →
                 </Link>
               </div>
@@ -193,7 +160,8 @@ export default function TicketDrawer({ ticketId, onClose, onSaved }: Props) {
                 <h3 className="font-bold">Assigned team</h3>
 
                 <label className="flex flex-col gap-1 text-xs text-slate-500">
-                  Maintenance team {!canReassign && '(can change only before work starts)'}
+                  Maintenance team{' '}
+                  {!canReassign && '(can change only before work starts)'}
                   <select
                     value={teamId}
                     disabled={!canReassign || saving}
@@ -237,7 +205,9 @@ export default function TicketDrawer({ ticketId, onClose, onSaved }: Props) {
                   </label>
                 )}
 
-                {saveError && <p className="text-xs text-red-600">{saveError}</p>}
+                {saveError && (
+                  <p className="text-xs text-red-600">{saveError}</p>
+                )}
 
                 {(canEditPriority || canReassign) && (
                   <button
@@ -254,7 +224,9 @@ export default function TicketDrawer({ ticketId, onClose, onSaved }: Props) {
             <section>
               <h3 className="mb-3 font-bold">Activity</h3>
               {!events.data && !events.error && <TimelineSkeleton />}
-              {events.error && <p className="text-sm text-red-600">{events.error}</p>}
+              {events.error && (
+                <p className="text-sm text-red-600">{events.error}</p>
+              )}
               <ol className="flex flex-col gap-4 border-l border-slate-200 pl-4">
                 {events.data?.items.map((e) => {
                   const who = eventActor(e);
@@ -262,15 +234,26 @@ export default function TicketDrawer({ ticketId, onClose, onSaved }: Props) {
                     <li key={e.id} className="relative">
                       <span
                         className={`absolute -left-5.25 top-1 h-2.5 w-2.5 rounded-full ${
-                          e.kind.startsWith('SLA') ? 'bg-red-500' : 'bg-green-500'
+                          e.kind.startsWith('SLA')
+                            ? 'bg-red-500'
+                            : 'bg-green-500'
                         }`}
                       />
                       <p className="text-sm font-medium">
                         {eventLabel(e)}
-                        {who && <span className="font-normal text-slate-500"> · {who}</span>}
+                        {who && (
+                          <span className="font-normal text-slate-500">
+                            {' '}
+                            · {who}
+                          </span>
+                        )}
                       </p>
-                      {e.note && <p className="text-xs text-slate-500">“{e.note}”</p>}
-                      <p className="text-xs text-slate-400">{formatDateTime(e.occurredAt)}</p>
+                      {e.note && (
+                        <p className="text-xs text-slate-500">“{e.note}”</p>
+                      )}
+                      <p className="text-xs text-slate-400">
+                        {formatDateTime(e.occurredAt)}
+                      </p>
                     </li>
                   );
                 })}

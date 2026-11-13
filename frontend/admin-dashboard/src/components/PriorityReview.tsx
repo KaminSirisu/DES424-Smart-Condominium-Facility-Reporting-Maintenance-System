@@ -1,17 +1,19 @@
 import { useState } from 'react';
 import { Check } from 'lucide-react';
 import { useAction } from '../hooks/useAction';
-import { setPriority } from '../services/tickets';
-import type { Priority, StaffProfile, Ticket } from '../services/types';
-
-const PRIORITIES: Priority[] = ['CRITICAL', 'MEDIUM', 'LOW'];
+import { PRIORITIES } from '../lib/constants';
+import { api } from '../services/api';
+import type { Priority, Ticket } from '../services/types';
 
 type PriorityReviewProps = {
   ticket: Ticket;
-  staff: StaffProfile;
+  onChanged: () => void;
 };
 
-export default function PriorityReview({ ticket, staff }: PriorityReviewProps) {
+export default function PriorityReview({
+  ticket,
+  onChanged,
+}: PriorityReviewProps) {
   const { busy, error, run } = useAction();
   const [choice, setChoice] = useState<Priority | undefined>(ticket.priority);
   const [reason, setReason] = useState('');
@@ -25,8 +27,9 @@ export default function PriorityReview({ ticket, staff }: PriorityReviewProps) {
   function handleUpdate() {
     if (!choice) return;
     void run(async () => {
-      await setPriority(ticket.id, staff, choice, reason);
+      await api.setPriority(ticket.id, choice, reason.trim());
       setReason('');
+      onChanged();
     });
   }
 
@@ -43,7 +46,12 @@ export default function PriorityReview({ ticket, staff }: PriorityReviewProps) {
         <button
           type="button"
           disabled={busy}
-          onClick={() => void run(() => setPriority(ticket.id, staff, current))}
+          onClick={() =>
+            void run(async () => {
+              await api.setPriority(ticket.id, current);
+              onChanged();
+            })
+          }
           className="flex items-center justify-center gap-1 rounded-lg border border-gray-300 py-2.5 text-sm disabled:opacity-50"
         >
           <Check size={16} />

@@ -12,10 +12,12 @@ const td = 'px-3 py-3';
 export default function StaffPage() {
   const now = useNow();
   const { data, error, loading, reload } = useApi(
-    () => Promise.all([api.getSummary(), getAllHistory(), api.listStaffAccounts()]),
+    () =>
+      Promise.all([api.getSummary(), getAllHistory(), api.listStaffAccounts()]),
     'staff',
   );
-  if (!data) return <LoadState loading={loading} error={error} onRetry={reload} />;
+  if (!data)
+    return <LoadState loading={loading} error={error} onRetry={reload} />;
   const [summary, history, accounts] = data;
 
   const tickets = history.items.map((e) => e.ticket);
@@ -42,9 +44,15 @@ export default function StaffPage() {
         <StatCard label="Active technicians" value={activeTechnicians} />
         <StatCard
           label="Open team jobs"
-          value={summary.countsByStatus.ASSIGNED + summary.countsByStatus.IN_PROGRESS}
+          value={
+            summary.countsByStatus.ASSIGNED + summary.countsByStatus.IN_PROGRESS
+          }
         />
-        <StatCard label="SLA breached" value={summary.overdueCount ?? 0} danger />
+        <StatCard
+          label="SLA breached"
+          value={summary.overdueCount ?? 0}
+          danger
+        />
       </div>
 
       <section className="overflow-x-auto rounded-2xl border border-slate-200 p-5">
@@ -65,7 +73,11 @@ export default function StaffPage() {
                 <td className={`${td} font-bold`}>{r.label}</td>
                 <td className={td}>{r.assigned}</td>
                 <td className={td}>{r.inProgress}</td>
-                <td className={`${td} ${r.overdue ? 'font-bold text-red-600' : ''}`}>{r.overdue}</td>
+                <td
+                  className={`${td} ${r.overdue ? 'font-bold text-red-600' : ''}`}
+                >
+                  {r.overdue}
+                </td>
                 <td className={td}>{r.completed}</td>
               </tr>
             ))}
@@ -75,7 +87,9 @@ export default function StaffPage() {
 
       <section className="overflow-x-auto rounded-2xl border border-slate-200 p-5">
         <h2 className="font-bold">Staff accounts</h2>
-        <p className="mb-2 text-xs text-slate-500">Accounts are created by the system administrator.</p>
+        <p className="mb-2 text-xs text-slate-500">
+          Accounts are created by the system administrator.
+        </p>
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-200">
@@ -92,12 +106,20 @@ export default function StaffPage() {
               <tr key={a.accountId} className="border-b border-slate-100">
                 <td className={`${td} font-medium`}>{a.displayName}</td>
                 <td className={td}>{a.email}</td>
-                <td className={td}>{a.role === 'MANAGER' ? 'Manager' : 'Technician'}</td>
+                <td className={td}>
+                  {a.role === 'MANAGER' ? 'Manager' : 'Technician'}
+                </td>
                 <td className={td}>{teamLabel(a.teamId)}</td>
                 <td className={td}>
-                  {a.isActive ? 'Active' : <span className="text-slate-400">Disabled</span>}
+                  {a.isActive ? (
+                    'Active'
+                  ) : (
+                    <span className="text-slate-400">Disabled</span>
+                  )}
                 </td>
-                <td className={td}>{a.lastLoginAt ? formatDateTime(a.lastLoginAt) : '—'}</td>
+                <td className={td}>
+                  {a.lastLoginAt ? formatDateTime(a.lastLoginAt) : '—'}
+                </td>
               </tr>
             ))}
           </tbody>

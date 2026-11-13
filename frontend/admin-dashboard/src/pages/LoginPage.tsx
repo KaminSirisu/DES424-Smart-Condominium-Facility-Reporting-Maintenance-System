@@ -3,6 +3,7 @@ import { Navigate, useNavigate } from 'react-router';
 import { Building2, KeyRound, Lock, Mail } from 'lucide-react';
 import { api, ApiError, errorMessage } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { homePath } from '../services/session';
 import type { MfaEnrollment, StaffSession } from '../services/types';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -21,7 +22,8 @@ function Field({ icon, children }: { icon: ReactNode; children: ReactNode }) {
   );
 }
 
-const inputClass = 'w-full bg-transparent text-sm outline-none placeholder:text-slate-400';
+const inputClass =
+  'w-full bg-transparent text-sm outline-none placeholder:text-slate-400';
 const buttonClass =
   'w-full rounded-full bg-[#163469] py-3.5 text-sm font-semibold tracking-[0.2em] text-white hover:bg-[#1d4185] disabled:opacity-60';
 
@@ -35,17 +37,12 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Already logged in: go straight to the dashboard.
-  if (session) return <Navigate to="/" replace />;
+  // Already logged in: go straight to this role's app.
+  if (session) return <Navigate to={homePath(session.staff.role)} replace />;
 
   function finish(s: StaffSession) {
-    if (s.staff.role !== 'MANAGER') {
-      setError('This dashboard is for managers only. Technicians use the staff portal.');
-      setStep({ kind: 'password' });
-      return;
-    }
     signIn(s);
-    navigate('/', { replace: true });
+    navigate(homePath(s.staff.role), { replace: true });
   }
 
   async function run(action: () => Promise<void>) {
@@ -54,8 +51,14 @@ export default function LoginPage() {
     try {
       await action();
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401 && step.kind !== 'password') {
-        setError('The code was wrong or the sign-in expired. Please try again.');
+      if (
+        e instanceof ApiError &&
+        e.status === 401 &&
+        step.kind !== 'password'
+      ) {
+        setError(
+          'The code was wrong or the sign-in expired. Please try again.',
+        );
       } else if (e instanceof ApiError && e.status === 401) {
         setError('Wrong email or password.');
       } else {
@@ -76,7 +79,11 @@ export default function LoginPage() {
         setStep({ kind: 'verify', challengeToken: res.challengeToken });
       } else {
         const enrollment = await api.enrollMfa(res.challengeToken);
-        setStep({ kind: 'enroll', challengeToken: res.challengeToken, enrollment });
+        setStep({
+          kind: 'enroll',
+          challengeToken: res.challengeToken,
+          enrollment,
+        });
       }
     });
   }
@@ -104,9 +111,11 @@ export default function LoginPage() {
     <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 px-4">
       <div className="mb-5 text-[#163469] flex flex-col items-center text-center">
         <Building2 size={44} className="" />
-        <h1 className="text-2xl">Smart Condominium Facility Reporter &<br />Maintenance System</h1>
+        <h1 className="text-2xl">
+          Smart Condominium Facility Reporter &<br />
+          Maintenance System
+        </h1>
       </div>
-      
 
       <div className="w-full max-w-md rounded-2xl bg-white p-10 shadow-xl shadow-slate-200/70">
         {step.kind === 'password' ? (
@@ -116,7 +125,10 @@ export default function LoginPage() {
               Enter your credentials to access the juristic office dashboard.
             </p>
 
-            <form onSubmit={onPasswordSubmit} className="mt-10 flex flex-col gap-8">
+            <form
+              onSubmit={onPasswordSubmit}
+              className="mt-10 flex flex-col gap-8"
+            >
               <Field icon={<Mail size={18} />}>
                 <input
                   className={inputClass}
@@ -160,7 +172,9 @@ export default function LoginPage() {
                 <div className="mb-4 flex justify-center rounded-lg bg-white p-3">
                   <QRCodeSVG value={step.enrollment.otpauthUri} size={168} />
                 </div>
-                <p className="text-xs text-slate-500">Setup key (shown only once)</p>
+                <p className="text-xs text-slate-500">
+                  Setup key (shown only once)
+                </p>
                 <code className="mt-1 block break-all font-mono text-sm text-slate-900">
                   {step.enrollment.secret}
                 </code>
@@ -202,7 +216,9 @@ export default function LoginPage() {
         )}
       </div>
 
-      <p className="mt-10 text-sm text-[#163469]">Contact the manager for an account.</p>
+      <p className="mt-10 text-sm text-[#163469]">
+        Contact the manager for an account.
+      </p>
     </div>
   );
 }

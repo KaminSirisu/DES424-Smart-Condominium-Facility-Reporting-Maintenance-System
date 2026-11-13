@@ -10,7 +10,12 @@ type Props = {
 };
 
 /** Skeleton while loading, an error with Retry, or nothing when the data is ready. */
-export default function LoadState({ loading, error, onRetry, skeleton }: Props) {
+export default function LoadState({
+  loading,
+  error,
+  onRetry,
+  skeleton,
+}: Props) {
   if (error) {
     return (
       <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">

@@ -10,9 +10,13 @@ import SettingsPage from './pages/SettingsPage';
 import NotFoundPage from './pages/NotFoundPage';
 import ErrorPage from './pages/ErrorPage';
 import TriagePage from './pages/TriagePage';
+import TechLayout from './layouts/TechLayout';
+import JobsPage from './pages/tech/JobsPage';
+import JobDetailPage from './pages/tech/JobDetailPage';
+import TechNotFoundPage from './pages/tech/TechNotFoundPage';
 
 const router = createBrowserRouter([
-  { path: '/login', element: <LoginPage />, errorElement: <ErrorPage />},
+  { path: '/login', element: <LoginPage />, errorElement: <ErrorPage /> },
   {
     path: '/',
     element: <AdminLayout />,
@@ -27,6 +31,16 @@ const router = createBrowserRouter([
       { path: '*', element: <NotFoundPage /> },
     ],
   },
+  {
+    path: '/tech',
+    element: <TechLayout />,
+    errorElement: <ErrorPage />,
+    children: [
+      { index: true, element: <JobsPage /> },
+      { path: 'jobs/:ticketId', element: <JobDetailPage /> },
+      { path: '*', element: <TechNotFoundPage /> },
+    ],
+  },
 ]);
 
 export default function App() {
@@ -34,6 +48,5 @@ export default function App() {
     <AuthProvider>
       <RouterProvider router={router} />
     </AuthProvider>
-    
   );
 }

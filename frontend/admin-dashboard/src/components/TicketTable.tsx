@@ -9,7 +9,9 @@ const NEW_MS = 60 * 60 * 1000; // created in the last hour -> "new" tag
 
 export default function TicketTable({ tickets, now, onSelect }: Props) {
   if (tickets.length === 0) {
-    return <p className="py-8 text-center text-sm text-slate-400">No tickets.</p>;
+    return (
+      <p className="py-8 text-center text-sm text-slate-400">No tickets.</p>
+    );
   }
 
   const th = 'px-3 py-3 text-left font-normal text-slate-500';
@@ -47,7 +49,8 @@ export default function TicketTable({ tickets, now, onSelect }: Props) {
               <td className="max-w-xs px-3 py-4">
                 <p className="line-clamp-2">{t.description}</p>
                 <p className="mt-1 flex items-center gap-1 text-xs text-slate-500">
-                  <MapPin size={12} className="shrink-0 text-red-500" /> {t.location}
+                  <MapPin size={12} className="shrink-0 text-red-500" />{' '}
+                  {t.location}
                 </p>
               </td>
               <td className="px-3 py-4">{teamLabel(t.teamId)}</td>

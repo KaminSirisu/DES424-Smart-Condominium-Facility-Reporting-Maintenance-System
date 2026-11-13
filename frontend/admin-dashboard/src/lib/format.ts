@@ -28,8 +28,12 @@ export function isOverdue(t: Ticket, now: number): boolean {
   );
 }
 
-export function slaLeft(t: Ticket, now: number): { text: string; overdue: boolean } {
-  if (t.status === 'DONE' || t.status === 'MERGED') return { text: 'closed', overdue: false };
+export function slaLeft(
+  t: Ticket,
+  now: number,
+): { text: string; overdue: boolean } {
+  if (t.status === 'DONE' || t.status === 'MERGED')
+    return { text: 'closed', overdue: false };
   if (!t.deadlineAt) return { text: '—', overdue: false };
   const diff = Date.parse(t.deadlineAt) - now;
   return diff < 0
@@ -39,7 +43,10 @@ export function slaLeft(t: Ticket, now: number): { text: string; overdue: boolea
 
 export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString('en-GB', {
-    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 }
 
@@ -57,7 +64,10 @@ export function actorLabel(e: TicketEvent): string {
  * Who set the ticket's current priority. AI when prioritySetBy is AI;
  * otherwise the actor of the latest event that set a priority.
  */
-export function prioritySetByLabel(t: Ticket, events: TicketEvent[] = []): string {
+export function prioritySetByLabel(
+  t: Ticket,
+  events: TicketEvent[] = [],
+): string {
   if (t.prioritySetBy !== 'STAFF') return ACTOR_LABEL.AI;
   const last = [...events].reverse().find((e) => e.toPriority !== undefined);
   return last ? actorLabel(last) : 'Staff'; // events not loaded yet

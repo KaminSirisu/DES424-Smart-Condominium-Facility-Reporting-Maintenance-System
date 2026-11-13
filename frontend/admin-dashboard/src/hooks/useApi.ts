@@ -15,10 +15,18 @@ export function useApi<T>(load: () => Promise<T>, key: string | number = '') {
     setError(null);
     loadRef
       .current()
-      .then((d) => { if (!cancelled) setData(d); })
-      .catch((e) => { if (!cancelled) setError(errorMessage(e)); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .then((d) => {
+        if (!cancelled) setData(d);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(errorMessage(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [key, tick]);
 
   return { data, error, loading, reload: () => setTick((t) => t + 1) };

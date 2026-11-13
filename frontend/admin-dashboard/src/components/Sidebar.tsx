@@ -68,7 +68,9 @@ const Sidebar = () => {
       </nav>
 
       <div className="mt-auto flex flex-col gap-2 border-t border-slate-100 px-3 pt-4 text-sm">
-        <p className="truncate font-medium text-slate-700">{session?.staff.name}</p>
+        <p className="truncate font-medium text-slate-700">
+          {session?.staff.name}
+        </p>
         <button
           onClick={signOut}
           className="flex items-center gap-2 text-slate-500 hover:text-orange-600"

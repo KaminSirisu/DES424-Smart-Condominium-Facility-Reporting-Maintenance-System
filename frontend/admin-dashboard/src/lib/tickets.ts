@@ -6,14 +6,31 @@ import type { Ticket } from '../services/types';
 export function matchesSearch(t: Ticket, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  return [t.id, shortId(t.id), t.description, t.location, teamLabel(t.teamId)].some((v) =>
-    v.toLowerCase().includes(q),
-  );
+  return [
+    t.id,
+    shortId(t.id),
+    t.description,
+    t.location,
+    teamLabel(t.teamId),
+  ].some((v) => v.toLowerCase().includes(q));
 }
 
-export function exportTickets(tickets: Ticket[], now: number, filename: string): void {
+export function exportTickets(
+  tickets: Ticket[],
+  now: number,
+  filename: string,
+): void {
   downloadCsv(filename, [
-    ['Ticket', 'Description', 'Location', 'Team', 'Priority', 'Status', 'SLA left', 'Created'],
+    [
+      'Ticket',
+      'Description',
+      'Location',
+      'Team',
+      'Priority',
+      'Status',
+      'SLA left',
+      'Created',
+    ],
     ...tickets.map((t) => [
       t.id,
       t.description,

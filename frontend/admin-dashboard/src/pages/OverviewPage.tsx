@@ -7,7 +7,14 @@ import StatCard from '../components/StatCard';
 import LoadState from '../components/LoadState';
 import TicketTable from '../components/TicketTable';
 import TicketDrawer from '../components/TicketDrawer';
-import { formatDateTime, isOpen, isOverdue, shortId, slaLeft, teamLabel } from '../lib/format';
+import {
+  formatDateTime,
+  isOpen,
+  isOverdue,
+  shortId,
+  slaLeft,
+  teamLabel,
+} from '../lib/format';
 import { exportTickets, matchesSearch } from '../lib/tickets';
 
 type Filter = 'ALL' | 'ASSIGNED' | 'IN_PROGRESS' | 'OVERDUE';
@@ -31,14 +38,18 @@ export default function OverviewPage() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
 
-  if (!data) return <LoadState loading={loading} error={error} onRetry={reload} />;
+  if (!data)
+    return <LoadState loading={loading} error={error} onRetry={reload} />;
   const [summary, history] = data;
 
   const tickets = history.items.map((e) => e.ticket);
   const open = tickets.filter(isOpen);
   const breaches = open.filter((t) => isOverdue(t, now));
   const closed24h = tickets.filter(
-    (t) => t.status === 'DONE' && t.completedAt && now - Date.parse(t.completedAt) < DAY_MS,
+    (t) =>
+      t.status === 'DONE' &&
+      t.completedAt &&
+      now - Date.parse(t.completedAt) < DAY_MS,
   ).length;
 
   const rows = open
@@ -56,7 +67,9 @@ export default function OverviewPage() {
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Maintenance overview</h1>
-          <p className="text-sm text-slate-500">● Live · {formatDateTime(summary.generatedAt)}</p>
+          <p className="text-sm text-slate-500">
+            ● Live · {formatDateTime(summary.generatedAt)}
+          </p>
         </div>
         <div className="flex gap-2">
           <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2">
@@ -80,10 +93,20 @@ export default function OverviewPage() {
       {error && <LoadState loading={false} error={error} onRetry={reload} />}
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Assigned to teams" value={summary.countsByStatus.ASSIGNED} />
-        <StatCard label="In progress" value={summary.countsByStatus.IN_PROGRESS} />
+        <StatCard
+          label="Assigned to teams"
+          value={summary.countsByStatus.ASSIGNED}
+        />
+        <StatCard
+          label="In progress"
+          value={summary.countsByStatus.IN_PROGRESS}
+        />
         <StatCard label="Closed (24h)" value={closed24h} />
-        <StatCard label="SLA breached" value={summary.overdueCount ?? 0} danger />
+        <StatCard
+          label="SLA breached"
+          value={summary.overdueCount ?? 0}
+          danger
+        />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1fr_340px]">
@@ -117,7 +140,9 @@ export default function OverviewPage() {
                 {breaches.length}
               </span>
             </h2>
-            {breaches.length === 0 && <p className="text-sm text-slate-400">No breaches.</p>}
+            {breaches.length === 0 && (
+              <p className="text-sm text-slate-400">No breaches.</p>
+            )}
             <div className="flex flex-col gap-2">
               {breaches.map((t) => (
                 <button
@@ -126,11 +151,14 @@ export default function OverviewPage() {
                   className="rounded-lg border-l-4 border-red-600 bg-red-50 p-3 text-left hover:bg-red-100"
                 >
                   <p className="text-sm font-bold">
-                    {shortId(t.id)} <span className="font-medium">{t.description}</span>
+                    {shortId(t.id)}{' '}
+                    <span className="font-medium">{t.description}</span>
                   </p>
                   <p className="text-xs text-slate-600">
                     {teamLabel(t.teamId)} ·{' '}
-                    <span className="font-medium text-red-600">{slaLeft(t, now).text}</span>
+                    <span className="font-medium text-red-600">
+                      {slaLeft(t, now).text}
+                    </span>
                   </p>
                 </button>
               ))}
@@ -141,7 +169,10 @@ export default function OverviewPage() {
             <h2 className="mb-4 font-bold">Team workload (open jobs)</h2>
             <div className="flex flex-col gap-3">
               {summary.teamWorkloads.map((w) => (
-                <div key={w.teamId} className="grid grid-cols-[130px_1fr_24px] items-center gap-3 text-sm">
+                <div
+                  key={w.teamId}
+                  className="grid grid-cols-[130px_1fr_24px] items-center gap-3 text-sm"
+                >
                   <span>{teamLabel(w.teamId)}</span>
                   <div className="h-2 rounded-full bg-slate-100">
                     <div
@@ -158,7 +189,11 @@ export default function OverviewPage() {
       </div>
 
       {selected && (
-        <TicketDrawer ticketId={selected} onClose={() => setSelected(null)} onSaved={reload} />
+        <TicketDrawer
+          ticketId={selected}
+          onClose={() => setSelected(null)}
+          onSaved={reload}
+        />
       )}
     </div>
   );

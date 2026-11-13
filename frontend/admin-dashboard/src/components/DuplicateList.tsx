@@ -1,23 +1,34 @@
 import { useAction } from '../hooks/useAction';
-import { mergeTickets, useDuplicateCandidates } from '../services/tickets';
-import type { StaffProfile, Ticket } from '../services/types';
+import { shortId } from '../lib/format';
+import { api } from '../services/api';
+import type { Ticket } from '../services/types';
 
 type DuplicateListProps = {
   ticket: Ticket;
-  staff: StaffProfile;
+  candidates: Ticket[];
+  onChanged: () => void;
 };
 
-export default function DuplicateList({ ticket, staff }: DuplicateListProps) {
-  const candidates = useDuplicateCandidates(ticket);
+export default function DuplicateList({
+  ticket,
+  candidates,
+  onChanged,
+}: DuplicateListProps) {
   const { busy, error, run } = useAction();
 
   if (candidates.length === 0) return null;
 
   function handleMerge(source: Ticket) {
     const confirmed = window.confirm(
-      `Merge #${source.id} into this job? Its reporter will follow this job instead. This cannot be undone.`,
+      `Merge ${shortId(source.id)} into this job? Its reporter will follow this job instead. This cannot be undone.`,
     );
-    if (confirmed) void run(() => mergeTickets(ticket.id, staff, [source.id]));
+    if (!confirmed) return;
+    // One key per merge attempt: a retry after a dropped connection is answered 200, not merged twice.
+    const idempotencyKey = crypto.randomUUID();
+    void run(async () => {
+      await api.merge(ticket.id, [source.id], idempotencyKey);
+      onChanged();
+    });
   }
 
   return (
@@ -32,7 +43,7 @@ export default function DuplicateList({ ticket, staff }: DuplicateListProps) {
             className="rounded-lg border border-gray-200 p-3"
           >
             <p className="truncate text-sm">
-              #{candidate.id} · {candidate.description}
+              {shortId(candidate.id)} · {candidate.description}
             </p>
             <button
               type="button"

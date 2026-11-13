@@ -9,9 +9,18 @@ import { PRIORITIES, SLA_POLICY, TEAMS } from '../lib/constants';
 import { formatDateTime, formatDuration, shortId } from '../lib/format';
 import type { Priority, Ticket } from '../services/types';
 
-const field = 'rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:bg-slate-50';
+const field =
+  'rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:bg-slate-50';
 
-function TriageRow({ ticket, now, onDone }: { ticket: Ticket; now: number; onDone: () => void }) {
+function TriageRow({
+  ticket,
+  now,
+  onDone,
+}: {
+  ticket: Ticket;
+  now: number;
+  onDone: () => void;
+}) {
   const [teamId, setTeamId] = useState('');
   const [priority, setPriority] = useState<Priority | ''>('');
   const [reason, setReason] = useState('');
@@ -56,7 +65,12 @@ function TriageRow({ ticket, now, onDone }: { ticket: Ticket; now: number; onDon
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <select className={field} value={teamId} disabled={saving} onChange={(e) => setTeamId(e.target.value)}>
+        <select
+          className={field}
+          value={teamId}
+          disabled={saving}
+          onChange={(e) => setTeamId(e.target.value)}
+        >
           <option value="">Team…</option>
           {TEAMS.map((t) => (
             <option key={t.id} value={t.id}>
@@ -100,15 +114,18 @@ function TriageRow({ ticket, now, onDone }: { ticket: Ticket; now: number; onDon
 
 export default function TriagePage() {
   const now = useNow();
-  const { data, error, loading, reload } = useApi(() => api.listUntriaged(), 'triage');
+  const { data, error, loading, reload } = useApi(
+    () => api.listUntriaged(),
+    'triage',
+  );
 
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-2xl font-bold">Needs triage</h1>
         <p className="text-sm text-slate-500">
-          Reports the AI could not classify. Choose the team and priority; the SLA clock already
-          started when the report came in.
+          Reports the AI could not classify. Choose the team and priority; the
+          SLA clock already started when the report came in.
         </p>
       </div>
 

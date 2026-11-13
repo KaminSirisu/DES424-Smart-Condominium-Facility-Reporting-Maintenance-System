@@ -2,7 +2,11 @@ type BlockProps = { className?: string };
 
 /** One grey pulsing block. Size it with Tailwind classes (h-4 w-32 …). */
 export function Skeleton({ className = '' }: BlockProps) {
-  return <div className={`rounded-md bg-slate-200 motion-safe:animate-pulse ${className}`} />;
+  return (
+    <div
+      className={`rounded-md bg-slate-200 motion-safe:animate-pulse ${className}`}
+    />
+  );
 }
 
 /** Table-shaped skeleton: header line + rows like TicketTable. */
@@ -11,7 +15,10 @@ export function TableSkeleton({ rows = 6 }: { rows?: number }) {
     <div className="flex flex-col">
       <Skeleton className="mb-4 h-4 w-full max-w-lg" />
       {Array.from({ length: rows }, (_, i) => (
-        <div key={i} className="flex items-center gap-4 border-b border-slate-100 py-4">
+        <div
+          key={i}
+          className="flex items-center gap-4 border-b border-slate-100 py-4"
+        >
           <Skeleton className="h-4 w-20" />
           <div className="flex flex-1 flex-col gap-2">
             <Skeleton className="h-4 w-3/4" />
@@ -27,7 +34,13 @@ export function TableSkeleton({ rows = 6 }: { rows?: number }) {
 }
 
 /** Whole-page skeleton: title, stat cards, one table card. */
-export function PageSkeleton({ cards = 4, rows = 6 }: { cards?: number; rows?: number }) {
+export function PageSkeleton({
+  cards = 4,
+  rows = 6,
+}: {
+  cards?: number;
+  rows?: number;
+}) {
   return (
     <div role="status" aria-label="Loading" className="flex flex-col gap-6">
       <Skeleton className="h-8 w-64" />
@@ -53,7 +66,10 @@ export function CardListSkeleton({ count = 3 }: { count?: number }) {
   return (
     <div role="status" aria-label="Loading" className="flex flex-col gap-4">
       {Array.from({ length: count }, (_, i) => (
-        <div key={i} className="flex flex-col gap-3 rounded-2xl border border-slate-200 p-5">
+        <div
+          key={i}
+          className="flex flex-col gap-3 rounded-2xl border border-slate-200 p-5"
+        >
           <Skeleton className="h-4 w-24" />
           <Skeleton className="h-4 w-2/3" />
           <Skeleton className="h-3 w-1/3" />

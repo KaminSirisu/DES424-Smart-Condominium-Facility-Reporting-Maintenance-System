@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { TicketActionError } from '../services/tickets';
+import { errorMessage } from '../services/api';
 
 export function useAction() {
   const [busy, setBusy] = useState(false);
@@ -11,11 +11,7 @@ export function useAction() {
     try {
       await action();
     } catch (e) {
-      setError(
-        e instanceof TicketActionError
-          ? e.message
-          : 'Something went wrong. Please try again.',
-      );
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }

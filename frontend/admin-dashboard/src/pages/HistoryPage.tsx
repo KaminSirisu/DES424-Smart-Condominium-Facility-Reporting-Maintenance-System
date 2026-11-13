@@ -10,9 +10,19 @@ import { hoursBetween, shortId, teamLabel } from '../lib/format';
 const th = 'px-3 py-3 text-left font-normal text-slate-500';
 
 export default function HistoryPage() {
-  const { data, error, loading, reload } = useApi(() => getAllHistory(), 'history');
-  if (!data) return <LoadState loading={loading} error={error} onRetry={reload}
-        skeleton={<PageSkeleton cards={3} />} />;
+  const { data, error, loading, reload } = useApi(
+    () => getAllHistory(),
+    'history',
+  );
+  if (!data)
+    return (
+      <LoadState
+        loading={loading}
+        error={error}
+        onRetry={reload}
+        skeleton={<PageSkeleton cards={3} />}
+      />
+    );
 
   const closed = data.items
     .filter((e) => e.ticket.status === 'DONE')
@@ -22,14 +32,17 @@ export default function HistoryPage() {
       return {
         ticket: t,
         hours: hoursBetween(t.createdAt, finishedAt),
-        met: !t.deadlineAt || Date.parse(finishedAt) <= Date.parse(t.deadlineAt),
+        met:
+          !t.deadlineAt || Date.parse(finishedAt) <= Date.parse(t.deadlineAt),
       };
     });
 
   const metPct = closed.length
     ? Math.round((closed.filter((c) => c.met).length / closed.length) * 100)
     : 0;
-  const avgHours = closed.length ? closed.reduce((sum, c) => sum + c.hours, 0) / closed.length : 0;
+  const avgHours = closed.length
+    ? closed.reduce((sum, c) => sum + c.hours, 0) / closed.length
+    : 0;
 
   const areas = new Map<string, { count: number; met: number }>();
   for (const c of closed) {
@@ -41,7 +54,15 @@ export default function HistoryPage() {
 
   function exportCsv() {
     downloadCsv('closed-jobs.csv', [
-      ['Ticket', 'Description', 'Location', 'Team', 'Priority', 'Hours taken', 'SLA'],
+      [
+        'Ticket',
+        'Description',
+        'Location',
+        'Team',
+        'Priority',
+        'Hours taken',
+        'SLA',
+      ],
       ...closed.map((c) => [
         c.ticket.id,
         c.ticket.description,
@@ -80,17 +101,28 @@ export default function HistoryPage() {
             .map(([location, area]) => {
               const pct = Math.round((area.met / area.count) * 100);
               return (
-                <div key={location} className="min-w-36 rounded-xl border border-slate-200 p-3">
+                <div
+                  key={location}
+                  className="min-w-36 rounded-xl border border-slate-200 p-3"
+                >
                   <p className="font-bold">{location}</p>
                   <p className="text-2xl font-bold">{area.count}</p>
                   <p className="text-xs text-slate-500">
                     Met SLA{' '}
-                    <span className={pct === 100 ? 'text-green-600' : 'text-red-600'}>{pct}%</span>
+                    <span
+                      className={
+                        pct === 100 ? 'text-green-600' : 'text-red-600'
+                      }
+                    >
+                      {pct}%
+                    </span>
                   </p>
                 </div>
               );
             })}
-          {areas.size === 0 && <p className="text-sm text-slate-400">No closed jobs yet.</p>}
+          {areas.size === 0 && (
+            <p className="text-sm text-slate-400">No closed jobs yet.</p>
+          )}
         </div>
       </section>
 
@@ -121,7 +153,9 @@ export default function HistoryPage() {
                 <td className="px-3 py-3">
                   <span
                     className={`rounded-full px-2 py-0.5 text-xs ${
-                      met ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'
+                      met
+                        ? 'bg-green-50 text-green-700'
+                        : 'bg-red-50 text-red-600'
                     }`}
                   >
                     {met ? 'Met' : 'Missed'}

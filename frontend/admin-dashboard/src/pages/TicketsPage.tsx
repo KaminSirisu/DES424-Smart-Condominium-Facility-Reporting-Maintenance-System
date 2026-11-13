@@ -20,19 +20,31 @@ const RANK: Record<TicketStatus, number> = {
 
 export default function TicketsPage() {
   const now = useNow();
-  const { data, error, loading, reload } = useApi(() => getAllHistory(), 'tickets');
+  const { data, error, loading, reload } = useApi(
+    () => getAllHistory(),
+    'tickets',
+  );
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
 
-  if (!data) return (
-    <LoadState loading={loading} error={error} onRetry={reload}
-        skeleton={<PageSkeleton cards={0} rows={8} />} />
-  )
+  if (!data)
+    return (
+      <LoadState
+        loading={loading}
+        error={error}
+        onRetry={reload}
+        skeleton={<PageSkeleton cards={0} rows={8} />}
+      />
+    );
 
   const rows = data.items
     .map((e) => e.ticket)
     .filter((t) => matchesSearch(t, search))
-    .sort((a, b) => RANK[a.status] - RANK[b.status] || b.createdAt.localeCompare(a.createdAt));
+    .sort(
+      (a, b) =>
+        RANK[a.status] - RANK[b.status] ||
+        b.createdAt.localeCompare(a.createdAt),
+    );
 
   return (
     <div className="flex flex-col gap-6">
@@ -62,7 +74,11 @@ export default function TicketsPage() {
       </section>
 
       {selected && (
-        <TicketDrawer ticketId={selected} onClose={() => setSelected(null)} onSaved={reload} />
+        <TicketDrawer
+          ticketId={selected}
+          onClose={() => setSelected(null)}
+          onSaved={reload}
+        />
       )}
     </div>
   );

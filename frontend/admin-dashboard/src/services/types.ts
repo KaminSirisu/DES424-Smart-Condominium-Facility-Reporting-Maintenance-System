@@ -1,12 +1,18 @@
-export type TicketStatus = 'RECEIVED' | 'ASSIGNED' | 'IN_PROGRESS' | 'DONE' | 'MERGED';
+export type TicketStatus =
+  'RECEIVED' | 'ASSIGNED' | 'IN_PROGRESS' | 'DONE' | 'MERGED';
 export type Priority = 'CRITICAL' | 'MEDIUM' | 'LOW';
-export type TeamId = | 'ELECTRICAL' | 'PLUMBING' | 'HVAC' | 'CLEANING_SANITATION' | 'BUILDING_EQUIPMENT';
+export type TeamId =
+  | 'ELECTRICAL'
+  | 'PLUMBING'
+  | 'HVAC'
+  | 'CLEANING_SANITATION'
+  | 'BUILDING_EQUIPMENT';
 
 export type TicketPhoto = {
-    id: string;
-    purpose: 'DEFECT' | 'REPAIR_PROOF';
-    addedAt: string;
-    repairCycle?: string;
+  id: string;
+  purpose: 'DEFECT' | 'REPAIR_PROOF';
+  addedAt: string;
+  repairCycle?: number;
 };
 
 export type Ticket = {
@@ -71,7 +77,11 @@ export type DashboardHistory = {
     countsByStatus: Record<string, number>;
     countsByPriority: Record<string, number>;
     countsByTeam: Record<string, number>;
-    locationBreakdown: { location: string; reportedCount: number; completedCount: number }[];
+    locationBreakdown: {
+      location: string;
+      reportedCount: number;
+      completedCount: number;
+    }[];
     completionCount: number;
     reopenCount: number;
   };
@@ -86,7 +96,11 @@ export type StaffProfile = {
   teamId?: string;
   teamName?: string;
 };
-export type StaffSession = { accessToken: string; expiresInSeconds: number; staff: StaffProfile };
+export type StaffSession = {
+  accessToken: string;
+  expiresInSeconds: number;
+  staff: StaffProfile;
+};
 export type MfaChallenge = {
   mfaRequired: true;
   mfaEnrolled: boolean;
@@ -108,4 +122,12 @@ export type ManagedAccount = {
   lastLoginAt?: string;
   passwordChangedAt: string;
   createdAt: string;
+};
+
+export type UploadGrant = {
+  uploadId: string;
+  uploadUrl: string;
+  method: 'PUT';
+  headers: Record<string, string>;
+  expiresAt: string;
 };
