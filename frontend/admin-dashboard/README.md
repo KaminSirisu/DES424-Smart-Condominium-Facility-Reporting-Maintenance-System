@@ -1,6 +1,6 @@
 # Staff portal
 
-This app will provide email/password login, technician task views, and manager views. Planned actions include accepting or changing priority, moving a ticket through its allowed statuses, uploading repair proof, merging duplicates, and viewing deadlines and historical reports.
+This app will provide email/password login, technician task views, and manager views. Planned actions include accepting or changing priority, moving a ticket through its allowed statuses, uploading repair proof, merging duplicates, and viewing deadlines and historical reports.The app is the juristic office (manager) dashboard. It runs on the deployed dev API, and a manager logs in with a password and an authenticator code. From the repository root, run `npm ci` and then `npm run dev:admin`; the local page is at `http://127.0.0.1:5174`. In development, requests go to `/api`, and the Vite proxy forwards them to the API (see `vite.config.ts`), so no CORS change is needed. Copy this folder's `.env.example` to `.env` to customize it. Run `npm run build --workspace @scfrms/admin-dashboard` to build it.
 
 Planned folders:
 
@@ -12,18 +12,45 @@ The backend, not just the UI, must authorize technician and manager actions. A `
 
 The current app is a plain React shell with no login or ticket screens. From the repository root, run `npm ci` and then `npm run dev:admin`. The local page is at `http://127.0.0.1:5174`. Copy this folder's `.env.example` to `.env` to customize the public page title. Run `npm run build --workspace @scfrms/admin-dashboard` to build it.
 
-Current Implementation:
+## Current implementation
 
-The route map:
+### Route map
 
-- `/`:
-- `/tickets`:
-- `/staff`:
-- `/history`:
-- `/settings`:
+| Route | Page | What it shows | API calls |
+| --- | --- | --- | --- |
+| `/login` | `LoginPage` | Email and password, then the 6-digit authenticator code (or first-time authenticator setup). Manager accounts only; there is no signup, accounts are created by the administrator. | `POST /auth/staff/login`, `/auth/staff/mfa/verify`, `/mfa/enroll`, `/mfa/confirm` |
+| `/` | `OverviewPage` | Count cards, open tickets with filters (All open, Assigned, In progress, Overdue) and search, SLA breaches, team workload, CSV export. | `GET /dashboard/summary`, `GET /dashboard/history` |
+| `/triage` | `TriagePage` | Reports the AI could not classify (still `RECEIVED`, no team). The manager chooses the team and priority. | `GET /tickets?status=RECEIVED`, `PATCH /tickets/{id}/triage` |
+| `/tickets` | `TicketsPage` | Every ticket (open first, then done, then merged), search, CSV export. | `GET /dashboard/history` |
+| `/staff` | `StaffPage` | Per-team assigned / in progress / overdue / completed counts and the staff account list (read-only). | `GET /dashboard/summary`, `GET /dashboard/history`, `GET /staff-accounts` |
+| `/history` | `HistoryPage` | Closed jobs, % that met the SLA, average fix time, breakdown by location, CSV export. | `GET /dashboard/history` |
+| `/settings` | `SettingsPage` | The SLA policy by priority and the teams. Read-only: the SLA is fixed in the backend. | none |
 
-How it work:
-AdminLayout render the sidebar component once, and each page render in <Outlet />.
+Clicking a ticket on Overview or All tickets opens `TicketDrawer`. It shows the photo, who set the priority (AI, Technician or Manager) and the activity log. While the ticket is `ASSIGNED` or `IN_PROGRESS`, the manager can change the priority; while it is `ASSIGNED`, the manager can move it to another team. A reason is required for every change.
+(`GET /tickets/{id}`, `GET /tickets/{id}/events`, `GET /tickets/{id}/photos/{photoId}/access`, `PATCH /tickets/{id}/priority`, `PATCH /tickets/{id}/assignment`)
 
-How to add page:
-Create the page in `/pages`, add a child route in `App.tsx`, and add an item to navItems in `Sidebar.tsx`
+### How it works
+
+- `App.tsx` defines the routes. `/login` is outside the layout. Every other page is a child of `AdminLayout`, which renders the sidebar once and the page in `<Outlet />`.
+- `AdminLayout` is the login guard: without a session it redirects to `/login`.
+- `AuthContext` shares the session with the components. `services/session.ts` keeps it in `sessionStorage`, so a refresh keeps the manager logged in and closing the tab logs them out.
+- `services/api.ts` holds all API calls. It adds the token, turns error responses into `ApiError`, and on a 401 clears the session and returns to `/login`.
+- `hooks/useApi.ts` loads data for a page (skeleton while loading, error with Retry, `reload()` after a save). `hooks/useNow.ts` updates the SLA countdown every minute.
+- The team names and the SLA hours shown in Settings are in `lib/constants.ts`. The SLA hours are a display copy of `backend/src/triage/policy.ts`, so change both together.
+
+### Folders
+
+- `src/pages/`: one file per route.
+- `src/components/`: Sidebar, TicketTable, TicketDrawer, badges, stat cards and skeletons.
+- `src/context/`: AuthContext.
+- `src/services/`: API types, API calls and session storage.
+- `src/hooks/`: useApi and useNow.
+- `src/lib/`: constants, formatting, CSV export and ticket search.
+
+### How to add a page
+
+Create the page in `src/pages/`, add a child route in `App.tsx`, and add an item to `navItems` in `components/Sidebar.tsx`.
+
+### Not done yet
+
+- Deployment: set `VITE_API_BASE_URL` to the API URL including `/v1`, and add the deployed admin URL as the `adminOrigin` CDK context so API Gateway allows it (CORS).
