@@ -391,5 +391,28 @@ describe('G02 development stack', () => {
         }),
       },
     });
+    // getTicket() reads photo metadata for every ticket mutation, including reopen.
+    for (const name of [
+      'SetPriority',
+      'TriageTicket',
+      'ReassignTicket',
+      'ReopenTicket',
+    ]) {
+      const policies = Object.entries(
+        t.findResources('AWS::IAM::Policy'),
+      ).filter(([id]) => id.startsWith(`${name}ServiceRoleDefaultPolicy`));
+      expect(policies).toHaveLength(1);
+      const statements = policies[0][1].Properties.PolicyDocument.Statement as {
+        Action: string | string[];
+        Resource: unknown;
+      }[];
+      expect(
+        statements.some(
+          ({ Action, Resource }) =>
+            [Action].flat().includes('dynamodb:Query') &&
+            JSON.stringify(Resource).includes('TicketPhotos'),
+        ),
+      ).toBe(true);
+    }
   }, 30000);
 });

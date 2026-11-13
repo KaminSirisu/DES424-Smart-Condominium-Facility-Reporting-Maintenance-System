@@ -639,28 +639,28 @@ export class ScfrmsDevStack extends Stack {
           'handlers/set-priority-entry.ts',
           apigwv2.HttpMethod.PATCH,
           '/tickets/{ticketId}/priority',
-          { read: [accounts, teams], write: ticketWrite },
+          { read: [accounts, teams, photos], write: ticketWrite },
         );
         route(
           'TriageTicket',
           'handlers/triage-ticket-entry.ts',
           apigwv2.HttpMethod.PATCH,
           '/tickets/{ticketId}/triage',
-          { read: [accounts, teams], write: ticketWrite },
+          { read: [accounts, teams, photos], write: ticketWrite },
         );
         route(
           'ReassignTicket',
           'handlers/reassign-ticket-entry.ts',
           apigwv2.HttpMethod.PATCH,
           '/tickets/{ticketId}/assignment',
-          { read: [accounts, teams], write: ticketWrite },
+          { read: [accounts, teams, photos], write: ticketWrite },
         );
         route(
           'ReopenTicket',
           'tickets/reopen-ticket.ts',
           apigwv2.HttpMethod.POST,
           '/tickets/{ticketId}/reopen',
-          { read: [reporters], write: ticketWrite, reporterOnly: true },
+          { read: [reporters, photos], write: ticketWrite, reporterOnly: true },
         );
         route(
           'MergeTickets',
