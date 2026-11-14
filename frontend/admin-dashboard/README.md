@@ -4,7 +4,30 @@ This app has two parts that share one login: the juristic office (manager) dashb
 
 From the repository root, run `npm ci` and then `npm run dev:admin`; the local page is at `http://127.0.0.1:5174`. In development, requests go to `/api`, and the Vite proxy forwards them to the API (see `vite.config.ts`), so no CORS change is needed. Copy this folder's `.env.example` to `.env` to customize it. Run `npm run build --workspace @scfrms/admin-dashboard` to build it.
 
-The backend, not just the UI, must authorize technician and manager actions. A `Dockerfile` should be added when the app has a real build and serving command. The container can then be deployed on ECS Fargate if the team pursues the course bonus.
+The backend, not just the UI, must authorize technician and manager actions. The Docker image serves the built app through nginx on port 8080. The API URL is baked into the browser bundle at build time and is public, so it must not contain a secret.
+
+Build and check the image from the repository root:
+
+```sh
+docker build -f frontend/admin-dashboard/Dockerfile \
+  --build-arg VITE_API_BASE_URL=https://h5ekgxy0j7.execute-api.ap-southeast-1.amazonaws.com/v1 \
+  -t scfrms-staff:local .
+docker run --rm -d --name scfrms-staff-local -p 8080:8080 scfrms-staff:local
+curl -fsS http://localhost:8080/healthz
+curl -fsS http://localhost:8080/tickets/tkt_example | head
+docker stop scfrms-staff-local
+```
+
+The `/tickets/...` check verifies the fallback that lets a direct ticket URL load the frontend. Once the staff site has a public HTTPS origin, set it in CDK as `adminOrigin` and redeploy the backend stack before testing browser API calls. The API and upload bucket use it for browser CORS, and new emails use it for ticket links. Existing emails do not change.
+
+For an ECS task using the standard Linux x86-64 architecture, build that platform explicitly on an ARM Mac:
+
+```sh
+docker buildx build --platform linux/amd64 --load \
+  -f frontend/admin-dashboard/Dockerfile \
+  --build-arg VITE_API_BASE_URL=https://h5ekgxy0j7.execute-api.ap-southeast-1.amazonaws.com/v1 \
+  -t scfrms-staff:amd64 .
+```
 
 ## Admin dashboard
 
