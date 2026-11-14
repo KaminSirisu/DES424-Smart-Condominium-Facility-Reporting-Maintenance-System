@@ -36,7 +36,10 @@
     "infra:synth": "cd infrastructure/aws && cdk synth",
     "infra:check:photo-asset": "node tests/smoke/check-photo-asset.mjs",
     "infra:diff": "cd infrastructure/aws && cdk diff",
-    "infra:deploy": "cd infrastructure/aws && cdk deploy"
+    "infra:deploy": "cd infrastructure/aws && cdk deploy",
+    "infra:staff:synth": "cd infrastructure/aws && cdk synth --app 'npx tsx bin/staff-app.ts'",
+    "infra:staff:diff": "cd infrastructure/aws && cdk diff --app 'npx tsx bin/staff-app.ts'",
+    "infra:staff:deploy": "cd infrastructure/aws && cdk deploy --app 'npx tsx bin/staff-app.ts'"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

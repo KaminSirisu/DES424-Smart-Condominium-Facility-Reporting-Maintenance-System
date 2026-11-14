@@ -1,5 +1,9 @@
 # G02 development stack
 
+The separate [staff portal container runbook](STAFF-PORTAL.md) covers its ECR,
+ECS, ALB and CloudFront stacks. Those resources are not part of the Lambda API
+stack described below.
+
 ## Extended backend deployment (PR #11)
 
 This branch adds the 15 remaining OpenAPI routes behind
