@@ -128,7 +128,7 @@ describe('LINE reporter channel', () => {
 
     const [to, messages] = push.mock.calls[0];
     expect(to).toBe('Ubbb');
-    expect(messages[0].altText).toContain('tkt_main');
+    expect(messages[0].altText).toContain('#MAIN');
     expect(JSON.stringify(messages[0])).toContain('/tickets/tkt_main');
   });
 

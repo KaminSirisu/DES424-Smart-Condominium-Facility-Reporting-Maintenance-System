@@ -53,8 +53,8 @@ describe('buildSlaBreachEmail', () => {
   it('holds the ticket, team, priority, category, location, deadline and time overdue', () => {
     const { subject, text } = buildSlaBreachEmail(ticket(), NOW);
 
-    expect(subject).toBe('[SLA breach] CRITICAL ticket tkt_1 - PLUMBING');
-    expect(text).toContain('Ticket:    tkt_1');
+    expect(subject).toBe('[SLA breach] CRITICAL ticket #1 - PLUMBING');
+    expect(text).toContain('Ticket:    #1');
     expect(text).toContain('Team:      PLUMBING');
     expect(text).toContain('Priority:  CRITICAL');
     expect(text).toContain('Category:  PLUMBING');
@@ -90,7 +90,7 @@ describe('buildSlaBreachEmail', () => {
       ticket({ teamId: undefined, priority: undefined, category: undefined }),
       NOW,
     );
-    expect(subject).toBe('[SLA breach] UNKNOWN ticket tkt_1 - UNASSIGNED');
+    expect(subject).toBe('[SLA breach] UNKNOWN ticket #1 - UNASSIGNED');
     expect(text).toContain('Category:  UNKNOWN');
   });
 
@@ -130,7 +130,7 @@ describe('buildSlaBreachEmail for a missed response target', () => {
       NOW,
       'SLA_RESPONSE_BREACHED',
     );
-    expect(subject).toBe('[SLA response] MEDIUM ticket tkt_1 - PLUMBING');
+    expect(subject).toBe('[SLA response] MEDIUM ticket #1 - PLUMBING');
     expect(text).toContain(
       'A ticket has not been started within its response target.',
     );
@@ -210,10 +210,10 @@ describe('buildSlaBreachEmail for a ticket waiting for triage', () => {
       NOW,
       'SLA_TRIAGE_DELAYED',
     );
-    expect(subject).toBe('[SLA triage] ticket tkt_1 is waiting for triage');
+    expect(subject).toBe('[SLA triage] ticket #1 is waiting for triage');
     expect(text).toContain('has not been triaged within 5 min');
     expect(text).toContain('no team and no deadline');
-    expect(text).toContain('Ticket:    tkt_1');
+    expect(text).toContain('Ticket:    #1');
     expect(text).toContain('Location:  Beside the lobby elevator');
     expect(text).toContain('Received:  2026-11-11 12:30 (Asia/Bangkok)');
     expect(text).toContain('Waiting:   5 h 5 min');
@@ -266,7 +266,7 @@ describe('buildSlaBreachEmail for a ticket waiting for triage', () => {
     expect(sender.send).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'boss@example.com',
-        subject: '[SLA triage] ticket tkt_1 is waiting for triage',
+        subject: '[SLA triage] ticket #1 is waiting for triage',
       }),
     );
     vi.unstubAllEnvs();
@@ -297,7 +297,7 @@ describe('sendSlaBreachEmail', () => {
     expect(sender.send).toHaveBeenCalledWith({
       from: 'noreply@example.com',
       to: 'boss@example.com',
-      subject: '[SLA breach] CRITICAL ticket tkt_1 - PLUMBING',
+      subject: '[SLA breach] CRITICAL ticket #1 - PLUMBING',
       text: expect.stringContaining(
         'View ticket: https://admin.example.com/tickets/tkt_1',
       ),

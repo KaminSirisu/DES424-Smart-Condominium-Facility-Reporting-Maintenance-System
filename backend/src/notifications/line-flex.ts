@@ -2,6 +2,7 @@ import type { TicketRecord } from '../tickets/types.js';
 import { detectSafetyHazard } from '../triage/safety.js';
 import type { LineMessage } from './line-messenger.js';
 import { formatBangkok } from './work-order-email.js';
+import { ticketReference } from './ticket-reference.js';
 
 /**
  * LINE Flex Messages for the reporter (SCFRMS-45): the receipt, the
@@ -208,7 +209,7 @@ export function buildReceiptMessage(
   }
   body.push(
     text('We have received your report.'),
-    row('Ticket', ticket.id),
+    row('Ticket', ticketReference(ticket.id)),
     row('Location', cleanText(ticket.location, MAX_LOCATION_LENGTH)),
     row('Received', `${formatBangkok(ticket.createdAt)} (Bangkok time)`),
     ...emergencyBlock(options),
@@ -219,7 +220,7 @@ export function buildReceiptMessage(
   if (details) footer.push(button('View report', details));
 
   return bubble(
-    `Report received: ${ticket.id}`,
+    `Report received: ${ticketReference(ticket.id)}`,
     hazard ? 'Report received: possible emergency' : 'Report received',
     body,
     footer,
@@ -238,11 +239,11 @@ export function buildAssignedMessage(
   if (details) footer.push(button('View report', details));
 
   return bubble(
-    `Your report ${ticket.id} was assigned to the ${label} team`,
+    `Your report ${ticketReference(ticket.id)} was assigned to the ${label} team`,
     'Report assigned',
     [
       text(`Your report was assigned to the ${label} team.`),
-      row('Ticket', ticket.id),
+      row('Ticket', ticketReference(ticket.id)),
       row('Location', cleanText(ticket.location, MAX_LOCATION_LENGTH)),
     ],
     footer,
@@ -260,11 +261,11 @@ export function buildStartedMessage(
   if (details) footer.push(button('View report', details));
 
   return bubble(
-    `Work started on your report ${ticket.id}`,
+    `Work started on your report ${ticketReference(ticket.id)}`,
     'Work started',
     [
       text(`The ${label} team has started work on your report.`),
-      row('Ticket', ticket.id),
+      row('Ticket', ticketReference(ticket.id)),
       row('Location', cleanText(ticket.location, MAX_LOCATION_LENGTH)),
     ],
     footer,
@@ -285,13 +286,13 @@ export function buildReopenedMessage(
   if (details) footer.push(button('View report', details));
 
   return bubble(
-    `Your report ${ticket.id} was reopened`,
+    `Your report ${ticketReference(ticket.id)} was reopened`,
     'Report reopened',
     [
       text(
         `Your report was reopened and sent back to the ${label} team to check the repair again.`,
       ),
-      row('Ticket', ticket.id),
+      row('Ticket', ticketReference(ticket.id)),
       row('Location', cleanText(ticket.location, MAX_LOCATION_LENGTH)),
     ],
     footer,
@@ -315,14 +316,14 @@ export function buildMergedMessage(
   if (details) footer.push(button('View report', details));
 
   return bubble(
-    `Your report ${ticket.id} was merged into ${into}`,
+    `Your report ${ticketReference(ticket.id)} was merged into ${ticketReference(into)}`,
     'Report merged',
     [
       text(
         'A technician found that another report describes the same problem and merged yours into it. You will get updates on that report.',
       ),
-      row('Your ticket', ticket.id),
-      row('Now tracked as', into),
+      row('Your ticket', ticketReference(ticket.id)),
+      row('Now tracked as', ticketReference(into)),
       row('Location', cleanText(ticket.location, MAX_LOCATION_LENGTH)),
     ],
     footer,
@@ -351,11 +352,11 @@ export function buildCompletedMessage(
   if (reopen) footer.push(button('Re-open', reopen));
 
   return bubble(
-    `Repair completed for your report ${ticket.id}`,
+    `Repair completed for your report ${ticketReference(ticket.id)}`,
     'Repair completed',
     [
       text('The repair for your report is finished.'),
-      row('Ticket', ticket.id),
+      row('Ticket', ticketReference(ticket.id)),
       row('Location', cleanText(ticket.location, MAX_LOCATION_LENGTH)),
       text(
         'If the problem is still there, you can re-open the report within 7 days.',

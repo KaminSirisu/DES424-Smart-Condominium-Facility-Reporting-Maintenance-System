@@ -3,6 +3,7 @@ import { getTeamEmail } from '../shared/teams.js';
 import type { TicketRecord } from '../tickets/types.js';
 import { isTeamId } from '../triage/policy.js';
 import { staffTicketLink } from './staff-ticket-link.js';
+import { ticketReference } from './ticket-reference.js';
 
 /**
  * Work order email to the assigned maintenance team (SCFRMS-46).
@@ -95,7 +96,7 @@ export function buildWorkOrderEmail(
   const lines = [
     `A new work order has been assigned to the ${teamId} team.`,
     '',
-    `Ticket:    ${ticket.id}`,
+    `Ticket:    ${ticketReference(ticket.id)}`,
     `Priority:  ${priority}`,
     `Category:  ${category}`,
     `Location:  ${ticket.location}`,
@@ -113,7 +114,7 @@ export function buildWorkOrderEmail(
   }
 
   return {
-    subject: `[${priority}] Work order ${ticket.id} - ${teamId}`,
+    subject: `[${priority}] Work order ${ticketReference(ticket.id)} - ${teamId}`,
     text: lines.join('\n') + '\n',
   };
 }

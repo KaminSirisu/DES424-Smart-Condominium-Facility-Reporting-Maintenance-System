@@ -1,5 +1,6 @@
 import type { TicketRecord } from '../tickets/types.js';
 import { staffTicketLink } from './staff-ticket-link.js';
+import { ticketReference } from './ticket-reference.js';
 import {
   responseMinutes,
   slaStartOf,
@@ -54,7 +55,7 @@ export function buildSlaBreachEmail(
   const priority = ticket.priority ?? 'UNKNOWN';
 
   const common = [
-    `Ticket:    ${ticket.id}`,
+    `Ticket:    ${ticketReference(ticket.id)}`,
     `Team:      ${team}`,
     `Priority:  ${priority}`,
     `Category:  ${ticket.category ?? 'UNKNOWN'}`,
@@ -67,7 +68,7 @@ export function buildSlaBreachEmail(
   if (kind === 'SLA_TRIAGE_DELAYED') {
     // No team, priority or deadline yet: say what a manager has to do.
     return {
-      subject: `[SLA triage] ticket ${ticket.id} is waiting for triage`,
+      subject: `[SLA triage] ticket ${ticketReference(ticket.id)} is waiting for triage`,
       text:
         [
           'A ticket has not been triaged within ' +
@@ -75,7 +76,7 @@ export function buildSlaBreachEmail(
             'could not classify it or is stuck. It has no team and no deadline ' +
             'until a manager triages it.',
           '',
-          `Ticket:    ${ticket.id}`,
+          `Ticket:    ${ticketReference(ticket.id)}`,
           `Location:  ${ticket.location}`,
           `Received:  ${formatBangkok(ticket.createdAt)} (Asia/Bangkok)`,
           `Waiting:   ${formatDuration(now.getTime() - Date.parse(ticket.createdAt))}`,
@@ -132,7 +133,7 @@ export function buildSlaBreachEmail(
   }
 
   return {
-    subject: `[${subjectLabel}] ${priority} ticket ${ticket.id} - ${team}`,
+    subject: `[${subjectLabel}] ${priority} ticket ${ticketReference(ticket.id)} - ${team}`,
     text: lines.join('\n') + '\n',
   };
 }

@@ -3,6 +3,7 @@ import type { TicketRecord } from '../tickets/types.js';
 import { isTeamId } from '../triage/policy.js';
 import { formatDuration } from './sla-breach-email.js';
 import { staffTicketLink } from './staff-ticket-link.js';
+import { ticketReference } from './ticket-reference.js';
 import {
   formatBangkok,
   sesSender,
@@ -32,7 +33,7 @@ export function buildSlaWarningEmail(
   const lines = [
     'A ticket of your team has used 75% of its resolution time and is not done yet.',
     '',
-    `Ticket:    ${ticket.id}`,
+    `Ticket:    ${ticketReference(ticket.id)}`,
     `Priority:  ${priority}`,
     `Category:  ${ticket.category ?? 'UNKNOWN'}`,
     `Status:    ${ticket.status}`,
@@ -48,7 +49,7 @@ export function buildSlaWarningEmail(
   }
 
   return {
-    subject: `[SLA warning] ${priority} ticket ${ticket.id} - ${team}`,
+    subject: `[SLA warning] ${priority} ticket ${ticketReference(ticket.id)} - ${team}`,
     text: lines.join('\n') + '\n',
   };
 }
