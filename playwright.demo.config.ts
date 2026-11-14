@@ -1,4 +1,7 @@
 import { defineConfig } from '@playwright/test';
+import { existsSync } from 'node:fs';
+
+const gmailState = 'playwright/.auth/gmail.json';
 
 /** Live demo only: each run changes one real ticket, so retries stay off. */
 export default defineConfig({
@@ -14,7 +17,9 @@ export default defineConfig({
     ['html', { open: 'never', outputFolder: 'playwright-report/staff-demo' }],
   ],
   use: {
-    viewport: { width: 520, height: 900 },
+    channel: 'chrome',
+    storageState: existsSync(gmailState) ? gmailState : undefined,
+    viewport: { width: 1280, height: 900 },
     video: 'on',
     screenshot: 'only-on-failure',
   },

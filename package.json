@@ -33,6 +33,7 @@
     "test:smoke:extended": "node tests/smoke/extended-api.mjs",
     "test:demo:staff": "playwright test --config playwright.demo.config.ts --headed",
     "test:demo:staff:list": "playwright test --config playwright.demo.config.ts --list",
+    "test:demo:gmail:setup": "node --import tsx tests/e2e/setup-gmail.ts",
     "build": "npm run build --workspaces",
     "infra:typecheck": "tsc -p infrastructure/aws/tsconfig.json --noEmit",
     "infra:synth": "cd infrastructure/aws && cdk synth",
