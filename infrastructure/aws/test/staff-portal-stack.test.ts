@@ -23,6 +23,9 @@ function templates(): { images: Template; portal: Template } {
     repository: images.repository,
     imageTag: 'abcdef012345',
     cloudFrontPrefixListId: 'pl-12345678',
+    vpcId: 'vpc-12345678',
+    publicSubnetIds: ['subnet-12345678', 'subnet-abcdef12'],
+    availabilityZones: ['ap-southeast-1a', 'ap-southeast-1b'],
   });
   return {
     images: Template.fromStack(images),
@@ -41,8 +44,11 @@ describe('staff portal stacks', () => {
     images.resourceCountIs('AWS::ECS::Service', 0);
   });
 
-  it('runs one x86-64 Fargate task without a NAT gateway', () => {
+  it('runs one x86-64 Fargate task in existing subnets without new networking', () => {
     const { portal } = templates();
+    portal.resourceCountIs('AWS::EC2::VPC', 0);
+    portal.resourceCountIs('AWS::EC2::Subnet', 0);
+    portal.resourceCountIs('AWS::EC2::InternetGateway', 0);
     portal.resourceCountIs('AWS::EC2::NatGateway', 0);
     portal.resourceCountIs('AWS::ECS::Service', 1);
     portal.hasResourceProperties('AWS::ECS::Service', {
@@ -96,6 +102,9 @@ describe('staff portal stacks', () => {
           repository: images.repository,
           imageTag: 'latest',
           cloudFrontPrefixListId: 'pl-12345678',
+          vpcId: 'vpc-12345678',
+          publicSubnetIds: ['subnet-12345678', 'subnet-abcdef12'],
+          availabilityZones: ['ap-southeast-1a', 'ap-southeast-1b'],
         }),
     ).toThrow('staffImageTag');
     expect(
@@ -105,6 +114,9 @@ describe('staff portal stacks', () => {
           repository: images.repository,
           imageTag: 'abcdef012345',
           cloudFrontPrefixListId: '',
+          vpcId: 'vpc-12345678',
+          publicSubnetIds: ['subnet-12345678', 'subnet-abcdef12'],
+          availabilityZones: ['ap-southeast-1a', 'ap-southeast-1b'],
         }),
     ).toThrow('cloudFrontPrefixListId');
   });

@@ -17,20 +17,30 @@ const images = new StaffImageStack(app, 'Des424G02StaffImage', {
 
 const imageTag = app.node.tryGetContext('staffImageTag');
 if (imageTag !== undefined) {
-  const cloudFrontPrefixListId = app.node.tryGetContext(
-    'cloudFrontPrefixListId',
-  );
+  const requiredContext = (key: string): string => {
+    const value: unknown = app.node.tryGetContext(key);
+    if (typeof value !== 'string' || !value) {
+      throw new Error(`${key} is required with staffImageTag.`);
+    }
+    return value;
+  };
   if (typeof imageTag !== 'string' || !imageTag) {
     throw new Error('staffImageTag must be a nonempty Git commit SHA.');
-  }
-  if (typeof cloudFrontPrefixListId !== 'string') {
-    throw new Error('cloudFrontPrefixListId is required with staffImageTag.');
   }
   new StaffPortalStack(app, 'Des424G02StaffPortal', {
     env,
     synthesizer: g02Synthesizer(),
     repository: images.repository,
     imageTag,
-    cloudFrontPrefixListId,
+    cloudFrontPrefixListId: requiredContext('cloudFrontPrefixListId'),
+    vpcId: requiredContext('staffVpcId'),
+    publicSubnetIds: [
+      requiredContext('staffPublicSubnetA'),
+      requiredContext('staffPublicSubnetB'),
+    ],
+    availabilityZones: [
+      requiredContext('staffAzA'),
+      requiredContext('staffAzB'),
+    ],
   });
 }

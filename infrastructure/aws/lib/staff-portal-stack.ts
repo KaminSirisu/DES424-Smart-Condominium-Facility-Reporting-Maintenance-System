@@ -38,6 +38,9 @@ export interface StaffPortalStackProps extends StackProps {
   repository: ecr.IRepository;
   imageTag: string;
   cloudFrontPrefixListId: string;
+  vpcId: string;
+  publicSubnetIds: [string, string];
+  availabilityZones: [string, string];
 }
 
 /** Static staff portal. All authenticated API calls go directly to HTTPS API Gateway. */
@@ -54,52 +57,30 @@ export class StaffPortalStack extends Stack {
       throw new Error('cloudFrontPrefixListId must be an AWS prefix-list ID.');
     }
 
-    // Explicit subnets avoid CDK availability-zone lookups during local synth.
-    const vpcResource = new ec2.CfnVPC(this, 'VpcResource', {
-      cidrBlock: '10.82.0.0/16',
-      enableDnsHostnames: true,
-      enableDnsSupport: true,
-    });
-    const gateway = new ec2.CfnInternetGateway(this, 'InternetGateway');
-    const gatewayAttachment = new ec2.CfnVPCGatewayAttachment(
-      this,
-      'GatewayAttachment',
-      { vpcId: vpcResource.ref, internetGatewayId: gateway.ref },
-    );
-    const routeTable = new ec2.CfnRouteTable(this, 'PublicRouteTable', {
-      vpcId: vpcResource.ref,
-    });
-    const internetRoute = new ec2.CfnRoute(this, 'InternetRoute', {
-      routeTableId: routeTable.ref,
-      destinationCidrBlock: '0.0.0.0/0',
-      gatewayId: gateway.ref,
-    });
-    internetRoute.addResourceDependency(gatewayAttachment);
-    const publicA = new ec2.CfnSubnet(this, 'PublicA', {
-      vpcId: vpcResource.ref,
-      cidrBlock: '10.82.0.0/24',
-      availabilityZone: 'ap-southeast-1a',
-      mapPublicIpOnLaunch: true,
-    });
-    const publicB = new ec2.CfnSubnet(this, 'PublicB', {
-      vpcId: vpcResource.ref,
-      cidrBlock: '10.82.1.0/24',
-      availabilityZone: 'ap-southeast-1b',
-      mapPublicIpOnLaunch: true,
-    });
-    const routeA = new ec2.CfnSubnetRouteTableAssociation(this, 'RouteA', {
-      subnetId: publicA.ref,
-      routeTableId: routeTable.ref,
-    });
-    const routeB = new ec2.CfnSubnetRouteTableAssociation(this, 'RouteB', {
-      subnetId: publicB.ref,
-      routeTableId: routeTable.ref,
-    });
+    if (!/^vpc-[a-f0-9]+$/.test(props.vpcId)) {
+      throw new Error('staffVpcId must be an existing VPC ID.');
+    }
+    if (
+      props.publicSubnetIds.length !== 2 ||
+      props.publicSubnetIds.some((id) => !/^subnet-[a-f0-9]+$/.test(id)) ||
+      props.publicSubnetIds[0] === props.publicSubnetIds[1]
+    ) {
+      throw new Error('Two distinct staff public subnet IDs are required.');
+    }
+    if (
+      props.availabilityZones.length !== 2 ||
+      props.availabilityZones.some((az) => !/^ap-southeast-1[a-z]$/.test(az)) ||
+      props.availabilityZones[0] === props.availabilityZones[1]
+    ) {
+      throw new Error('Staff subnets must be in different Singapore AZs.');
+    }
+
+    // Import existing public subnets: the shared account has reached its VPC quota.
+    // CloudShell preflight must verify ownership, internet routes and free IPs.
     const vpc = ec2.Vpc.fromVpcAttributes(this, 'Vpc', {
-      vpcId: vpcResource.ref,
-      availabilityZones: ['ap-southeast-1a', 'ap-southeast-1b'],
-      publicSubnetIds: [publicA.ref, publicB.ref],
-      publicSubnetRouteTableIds: [routeTable.ref, routeTable.ref],
+      vpcId: props.vpcId,
+      availabilityZones: props.availabilityZones,
+      publicSubnetIds: props.publicSubnetIds,
     });
     const cluster = new ecs.Cluster(this, 'Cluster', { vpc });
     const logGroup = new logs.LogGroup(this, 'Logs', {
@@ -151,7 +132,6 @@ export class StaffPortalStack extends Stack {
       path: '/healthz',
       healthyHttpCodes: '200',
     });
-    service.service.node.addDependency(internetRoute, routeA, routeB);
     // The ALB only serves public static assets to CloudFront. No login or API
     // request goes through it; the browser sends those to HTTPS API Gateway.
     service.loadBalancer.connections.allowFrom(
