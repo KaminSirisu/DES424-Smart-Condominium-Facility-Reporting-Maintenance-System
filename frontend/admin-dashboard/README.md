@@ -29,6 +29,8 @@ docker buildx build --platform linux/amd64 --load \
   -t scfrms-staff:amd64 .
 ```
 
+For the group account's ECR and ECS deployment, follow the [staff portal container runbook](../../infrastructure/aws/STAFF-PORTAL.md).
+
 ## Admin dashboard
 
 ### Route map
