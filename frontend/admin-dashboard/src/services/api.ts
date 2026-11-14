@@ -20,6 +20,11 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(
   '',
 );
 
+function returnToLogin(): void {
+  const from = encodeURIComponent(window.location.pathname);
+  window.location.assign(`/login?from=${from}`);
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -75,7 +80,7 @@ async function request<T>(
   if (auth) {
     const session = getSession();
     if (!session) {
-      window.location.assign('/login');
+      returnToLogin();
       throw new ApiError(401, 'NO_SESSION', 'Please log in.');
     }
     headers.authorization = `Bearer ${session.token}`;
@@ -97,7 +102,7 @@ async function request<T>(
   }
   if (response.status === 401 && auth) {
     clearSession();
-    window.location.assign('/login');
+    returnToLogin();
   }
   if (!response.ok) throw await parseError(response);
   return (await response.json()) as T;

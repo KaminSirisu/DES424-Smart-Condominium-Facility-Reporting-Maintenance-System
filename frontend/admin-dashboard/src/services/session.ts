@@ -48,3 +48,16 @@ export function clearSession(): void {
 export function homePath(role: StaffProfile['role']): string {
   return role === 'TECHNICIAN' ? '/tech' : '/';
 }
+
+/** Return to an emailed ticket only when its route belongs to the signed-in role. */
+export function postLoginPath(
+  role: StaffProfile['role'],
+  requested: unknown,
+): string {
+  if (typeof requested !== 'string') return homePath(role);
+  const pattern =
+    role === 'MANAGER'
+      ? /^\/tickets\/tkt_[0-9a-f]{26}$/
+      : /^\/tech\/jobs\/tkt_[0-9a-f]{26}$/;
+  return pattern.test(requested) ? requested : homePath(role);
+}

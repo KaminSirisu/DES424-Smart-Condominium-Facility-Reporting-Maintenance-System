@@ -37,9 +37,9 @@ describe('buildSlaWarningEmail', () => {
   it('holds what the team needs to act, and the time left', () => {
     const { subject, text } = buildSlaWarningEmail(ticket(), NOW);
 
-    expect(subject).toBe('[SLA warning] MEDIUM ticket tkt_1 - PLUMBING');
+    expect(subject).toBe('[SLA warning] MEDIUM ticket #1 - PLUMBING');
     expect(text).toContain('has used 75% of its resolution time');
-    expect(text).toContain('Ticket:    tkt_1');
+    expect(text).toContain('Ticket:    #1');
     expect(text).toContain('Priority:  MEDIUM');
     expect(text).toContain('Category:  PLUMBING');
     expect(text).toContain('Status:    IN_PROGRESS');
@@ -60,7 +60,7 @@ describe('buildSlaWarningEmail', () => {
   it('links to the ticket when the dashboard address is known', () => {
     expect(
       buildSlaWarningEmail(ticket(), NOW, 'https://admin.example.com/').text,
-    ).toContain('View ticket: https://admin.example.com/tickets/tkt_1');
+    ).toContain('View ticket: https://admin.example.com/tech/jobs/tkt_1');
   });
 
   it('says UNKNOWN for what the ticket does not have, and refuses a ticket with no deadline', () => {
@@ -68,7 +68,7 @@ describe('buildSlaWarningEmail', () => {
       ticket({ priority: undefined, category: undefined, teamId: undefined }),
       NOW,
     );
-    expect(subject).toBe('[SLA warning] UNKNOWN ticket tkt_1 - UNASSIGNED');
+    expect(subject).toBe('[SLA warning] UNKNOWN ticket #1 - UNASSIGNED');
     expect(text).toContain('Category:  UNKNOWN');
     expect(() =>
       buildSlaWarningEmail(ticket({ deadlineAt: undefined }), NOW),
@@ -100,9 +100,9 @@ describe('sendSlaWarningEmail', () => {
     expect(sender.send).toHaveBeenCalledWith({
       from: 'noreply@example.com',
       to: 'plumbing@example.com',
-      subject: '[SLA warning] MEDIUM ticket tkt_1 - PLUMBING',
+      subject: '[SLA warning] MEDIUM ticket #1 - PLUMBING',
       text: expect.stringContaining(
-        'View ticket: https://admin.example.com/tickets/tkt_1',
+        'View ticket: https://admin.example.com/tech/jobs/tkt_1',
       ),
     });
   });

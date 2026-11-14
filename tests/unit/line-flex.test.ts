@@ -83,9 +83,10 @@ describe.each(builders)('%s message', (_name, build) => {
     expect(JSON.stringify(message).length).toBeLessThan(30_000);
   });
 
-  it('shows the ticket id and location', () => {
+  it('shows the short ticket reference and location', () => {
     const texts = allText(build(ticket()));
-    expect(texts).toContain('tkt_0123456789abcdef0123456789');
+    expect(texts).toContain('#01234567');
+    expect(texts).not.toContain('tkt_0123456789abcdef0123456789');
     expect(texts).toContain('Beside the lobby elevator');
   });
 
@@ -280,10 +281,10 @@ describe('buildReopenedMessage', () => {
   it('tells the reporter the repair will be checked again', () => {
     const message = buildReopenedMessage(reopened(), { liffUrl: LIFF });
 
-    expect(message.altText).toBe(`Your report ${reopened().id} was reopened`);
+    expect(message.altText).toBe('Your report #01234567 was reopened');
     const text = allText(message).join(' ');
     expect(text).toContain('reopened');
-    expect(text).toContain(reopened().id);
+    expect(text).toContain('#01234567');
     expect(text).toContain('Beside the lobby elevator');
   });
 
@@ -315,12 +316,10 @@ describe('buildMergedMessage', () => {
   it('tells the reporter which ticket the report was merged into', () => {
     const message = buildMergedMessage(merged(), { liffUrl: LIFF });
 
-    expect(message?.altText).toBe(
-      'Your report tkt_dup1 was merged into tkt_main',
-    );
+    expect(message?.altText).toBe('Your report #DUP1 was merged into #MAIN');
     const text = allText(message).join(' ');
-    expect(text).toContain('tkt_dup1');
-    expect(text).toContain('tkt_main');
+    expect(text).toContain('#DUP1');
+    expect(text).toContain('#MAIN');
     expect(text).toContain('Beside the lobby elevator');
   });
 

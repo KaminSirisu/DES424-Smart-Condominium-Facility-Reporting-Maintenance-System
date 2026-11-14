@@ -45,7 +45,7 @@ describe('formatBangkok', () => {
 describe('buildWorkOrderEmail', () => {
   it('lists the ticket details and the deadline', () => {
     const { subject, text } = buildWorkOrderEmail(triaged());
-    expect(subject).toBe('[CRITICAL] Work order tkt_1 - PLUMBING');
+    expect(subject).toBe('[CRITICAL] Work order #1 - PLUMBING');
     expect(text).toContain('assigned to the PLUMBING team');
     expect(text).toContain('Priority:  CRITICAL');
     expect(text).toContain('Location:  Beside the lobby elevator');
@@ -66,7 +66,7 @@ describe('buildWorkOrderEmail', () => {
     expect(buildWorkOrderEmail(triaged()).text).not.toContain('View ticket');
     expect(
       buildWorkOrderEmail(triaged(), 'https://admin.example.com/').text,
-    ).toContain('View ticket: https://admin.example.com/tickets/tkt_1');
+    ).toContain('View ticket: https://admin.example.com/tech/jobs/tkt_1');
   });
 
   it('refuses a ticket that has not been triaged', () => {
@@ -123,8 +123,8 @@ describe('sendWorkOrderEmail', () => {
     expect(sender.send).toHaveBeenCalledWith({
       from: 'noreply@example.com',
       to: 'plumbing@example.com',
-      subject: '[CRITICAL] Work order tkt_1 - PLUMBING',
-      text: expect.stringContaining('Ticket:    tkt_1'),
+      subject: '[CRITICAL] Work order #1 - PLUMBING',
+      text: expect.stringContaining('Ticket:    #1'),
     });
   });
 

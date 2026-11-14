@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate, useParams } from 'react-router';
 import { Download, Search } from 'lucide-react';
 import { getAllHistory } from '../services/api';
 import { useApi } from '../hooks/useApi';
@@ -19,22 +20,34 @@ const RANK: Record<TicketStatus, number> = {
 };
 
 export default function TicketsPage() {
+  const navigate = useNavigate();
+  const { ticketId } = useParams();
   const now = useNow();
   const { data, error, loading, reload } = useApi(
     () => getAllHistory(),
     'tickets',
   );
   const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<string | null>(null);
+  const drawer = ticketId ? (
+    <TicketDrawer
+      key={ticketId}
+      ticketId={ticketId}
+      onClose={() => navigate('/tickets', { replace: true })}
+      onSaved={reload}
+    />
+  ) : null;
 
   if (!data)
     return (
-      <LoadState
-        loading={loading}
-        error={error}
-        onRetry={reload}
-        skeleton={<PageSkeleton cards={0} rows={8} />}
-      />
+      <>
+        <LoadState
+          loading={loading}
+          error={error}
+          onRetry={reload}
+          skeleton={<PageSkeleton cards={0} rows={8} />}
+        />
+        {drawer}
+      </>
     );
 
   const rows = data.items
@@ -70,16 +83,14 @@ export default function TicketsPage() {
       </header>
 
       <section className="overflow-x-auto rounded-2xl border border-slate-200 p-5">
-        <TicketTable tickets={rows} now={now} onSelect={setSelected} />
+        <TicketTable
+          tickets={rows}
+          now={now}
+          onSelect={(id) => navigate(`/tickets/${encodeURIComponent(id)}`)}
+        />
       </section>
 
-      {selected && (
-        <TicketDrawer
-          ticketId={selected}
-          onClose={() => setSelected(null)}
-          onSaved={reload}
-        />
-      )}
+      {drawer}
     </div>
   );
 }
