@@ -35,14 +35,36 @@ export type UploadGrant = {
   expiresAt: string;
 };
 
+export type TicketStatus =
+  'RECEIVED' | 'ASSIGNED' | 'IN_PROGRESS' | 'DONE' | 'MERGED';
+
+export type TicketPhoto = {
+  id: string;
+  purpose: 'DEFECT' | 'REPAIR_PROOF';
+  addedAt: string;
+  repairCycle?: number;
+};
+
+// Caller-safe ticket view (openapi.yaml `Ticket`). Priority and team are
+// absent until the AI triage has run.
 export type Ticket = {
   id: string;
   location: string;
   description: string;
-  status: string;
+  status: TicketStatus;
+  repairCycle: number;
+  photos: TicketPhoto[];
+  category?: string;
+  priority?: 'CRITICAL' | 'MEDIUM' | 'LOW';
+  teamId?: string;
+  deadlineAt?: string;
+  completedAt?: string;
+  mergedIntoTicketId?: string;
   createdAt: string;
   updatedAt: string;
 };
+
+export type PhotoAccess = { url: string; expiresAt: string };
 
 // An error response from the API: { error: { code, message, requestId } }.
 // status 0 means the request never got an answer (offline, CORS, S3 error).
@@ -189,7 +211,61 @@ export async function submitReport(
   );
 }
 
-// Turns an error from submitReport into a message for the reporter.
+// GET with the reporter's LINE token. A ticket of another LINE account is 404.
+async function getJson<T>(path: string): Promise<T> {
+  const token = await getLineIdToken();
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) throw await parseError(response);
+  return (await response.json()) as T;
+}
+
+// GET /tickets/{ticketId}: the reporter's own ticket.
+export function getTicket(ticketId: string): Promise<Ticket> {
+  return getJson<Ticket>(`/tickets/${encodeURIComponent(ticketId)}`);
+}
+
+// GET /tickets/{ticketId}/photos/{photoId}/access: a link to the photo that
+// works for at most 15 minutes. Use it right away; never store it.
+export function getPhotoAccess(
+  ticketId: string,
+  photoId: string,
+): Promise<PhotoAccess> {
+  return getJson<PhotoAccess>(
+    `/tickets/${encodeURIComponent(ticketId)}/photos/${encodeURIComponent(photoId)}/access`,
+  );
+}
+
+export const REOPEN_REASON_MAX = 1000;
+
+// POST /tickets/{ticketId}/reopen: send a finished repair back to the team.
+// Send the same idempotencyKey when retrying; the backend then answers 200
+// with the ticket instead of reopening it twice.
+export async function reopenTicket(
+  ticketId: string,
+  reason: string,
+  idempotencyKey: string,
+): Promise<Ticket> {
+  const token = await getLineIdToken();
+  const trimmed = reason.trim();
+  const response = await fetch(
+    `${API_BASE_URL}/tickets/${encodeURIComponent(ticketId)}/reopen`,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        'idempotency-key': idempotencyKey,
+      },
+      body: JSON.stringify(trimmed ? { reason: trimmed } : {}),
+    },
+  );
+  if (!response.ok) throw await parseError(response);
+  return (await response.json()) as Ticket;
+}
+
+// Turns an error from any call in this file into a message for the reporter.
 export function submitErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 401) {
@@ -198,7 +274,10 @@ export function submitErrorMessage(error: unknown): string {
     if (error.status === 429) {
       return 'Too many reports in a short time. Please wait a moment and try again.';
     }
-    if (error.status === 400 || error.status === 422 || error.status === 0) {
+    if (error.status === 404) {
+      return 'We could not find this report. It may have been sent from another LINE account.';
+    }
+    if ([0, 400, 409, 422].includes(error.status)) {
       return error.message;
     }
   } else if (error instanceof Error && !(error instanceof TypeError)) {
@@ -207,3 +286,6 @@ export function submitErrorMessage(error: unknown): string {
   }
   return 'Could not send your report. Please try again.';
 }
+
+// Same function under a name that fits every page, not only the report form.
+export const apiErrorMessage = submitErrorMessage;

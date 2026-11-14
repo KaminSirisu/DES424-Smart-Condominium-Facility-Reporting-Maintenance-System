@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import ReportForm from './components/ReportForm';
 import liff from '@line/liff';
 import { initLiff, type LiffMode } from './utils/liff';
+import { useRoute } from './lib/router';
+import TicketDetailPage from './pages/TicketDetailPage';
+import ReopenPage from './pages/ReopenPage';
 
 type LiffState =
   | { status: 'loading' }
@@ -10,6 +13,7 @@ type LiffState =
 
 export default function App() {
   const [liffState, setLiffState] = useState<LiffState>({ status: 'loading' });
+  const route = useRoute();
 
   useEffect(() => {
     let ignore = false;
@@ -27,9 +31,24 @@ export default function App() {
       ignore = true;
     };
   }, []);
+  // Ticket pages (opened from the LINE message buttons) have their own header.
+  if (liffState.status === 'ready' && route.name !== 'report') {
+    return (
+      <main className="mx-auto min-h-screen max-w-md bg-white">
+        {route.name === 'ticket' ? (
+          <TicketDetailPage key={route.ticketId} ticketId={route.ticketId} />
+        ) : (
+          <ReopenPage key={route.ticketId} ticketId={route.ticketId} />
+        )}
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto max-w-md px-4 py-6">
-      <h1 className="mb-4 text-2xl font-bold text-center">Report a Problem</h1>
+      <h1 className="mb-4 text-2xl font-bold text-center">
+        {route.name === 'report' ? 'Report a Problem' : 'Your report'}
+      </h1>
       {liffState.status === 'loading' && (
         <div
           role="status"
