@@ -4,8 +4,9 @@ This is a separate CDK app from `Des424G02ScfrmsDev`. It does not change the
 Lambda API stack. Deploy `Des424G02StaffImage` first to create a private ECR
 repository. Build and push the image, then deploy `Des424G02StaffPortal`.
 
-The portal stack runs one Linux x86-64 Fargate task (0.25 vCPU, 512 MiB) in a
-two-AZ public VPC with no NAT gateway. An Application Load Balancer accepts
+The portal stack runs one Linux x86-64 Fargate task (0.25 vCPU, 512 MiB) in two
+public subnets of an existing VPC. It creates no VPC, subnet, route, internet
+gateway, or NAT gateway. An Application Load Balancer accepts
 requests only from the AWS-managed CloudFront origin-facing prefix list.
 CloudFront provides a public HTTPS URL without a custom domain. The ALB serves
 only the public static site; the browser sends login and other API requests
@@ -63,8 +64,37 @@ are missing.
 
 ## 3. Review and deploy the HTTPS portal
 
-Find the regional AWS-managed CloudFront prefix list and verify that the two
-availability zones used by the VPC are enabled:
+The first portal deployment failed because this shared account has reached its
+VPC quota. `Des424G02StaffImage` and the pushed image succeeded. The failed
+`Des424G02StaffPortal` stack is `ROLLBACK_COMPLETE`; remove **only that failed
+stack** before retrying. Keep the image stack and ECR repository. The two
+existing public subnets below belong to the account's default VPC, have free
+addresses in different availability zones, and use its active internet route.
+Do not modify the default VPC, its subnets, or its routes.
+
+Run the following commands one at a time in CloudShell:
+
+```sh
+aws cloudformation describe-stacks --stack-name Des424G02StaffPortal --region ap-southeast-1 --query 'Stacks[0].StackStatus' --output text
+aws cloudformation delete-stack --stack-name Des424G02StaffPortal --region ap-southeast-1
+aws cloudformation wait stack-delete-complete --stack-name Des424G02StaffPortal --region ap-southeast-1
+```
+
+Only run `delete-stack` when the first command returns `ROLLBACK_COMPLETE`.
+After this fix is merged, refresh the CloudShell checkout to `main`. Reuse the
+image tag pushed in step 2; do not rebuild the image just because the CDK code
+changed. The image pushed for the failed attempt was tagged `8be1b9337cf9`.
+
+```sh
+cd ~/scfrms-g02
+git fetch origin main
+git switch --detach FETCH_HEAD
+STAFF_IMAGE_TAG=8be1b9337cf9
+aws ecr describe-images --repository-name des424-g02-scfrms-staff --image-ids "imageTag=${STAFF_IMAGE_TAG}" --region ap-southeast-1 --query 'imageDetails[0].imageDigest' --output text
+```
+
+Find the regional AWS-managed CloudFront prefix list and use the verified
+default VPC and public subnets:
 
 ```sh
 CF_PREFIX_LIST_ID=$(aws ec2 describe-managed-prefix-lists \
@@ -74,21 +104,33 @@ CF_PREFIX_LIST_ID=$(aws ec2 describe-managed-prefix-lists \
 printf 'CloudFront prefix list: %s\n' "$CF_PREFIX_LIST_ID"
 aws ec2 describe-availability-zones --region ap-southeast-1 \
   --query 'AvailabilityZones[].[ZoneName,State]' --output table
+STAFF_VPC_ID=vpc-0e1d5c0a320fb43b5
+STAFF_SUBNET_A=subnet-03f47dd0f3e7c3588
+STAFF_SUBNET_B=subnet-0ced607fb9dd83ef5
 npm run infra:staff:diff -- Des424G02StaffPortal --method template \
   -c "staffImageTag=${STAFF_IMAGE_TAG}" \
-  -c "cloudFrontPrefixListId=${CF_PREFIX_LIST_ID}"
+  -c "cloudFrontPrefixListId=${CF_PREFIX_LIST_ID}" \
+  -c "staffVpcId=${STAFF_VPC_ID}" \
+  -c "staffPublicSubnetA=${STAFF_SUBNET_A}" \
+  -c "staffPublicSubnetB=${STAFF_SUBNET_B}" \
+  -c staffAzA=ap-southeast-1a -c staffAzB=ap-southeast-1b
 ```
 
-The diff should create a VPC, two public subnets, an internet gateway, an ECS
-cluster/service/task, one ALB, CloudWatch logs, and one CloudFront distribution.
-It should not change DynamoDB, S3 uploads, the Lambda API or LINE/SES secrets.
+The diff should create an ECS cluster/service/task, one ALB, its own security
+groups, CloudWatch logs, and one CloudFront distribution. It should create **no
+VPC, subnet, route, or internet gateway** and should not change DynamoDB, S3
+uploads, the Lambda API, or LINE/SES secrets.
 If the prefix list is `None`, an availability zone is not enabled, or the diff
 includes other resources, stop and inspect it before deploying.
 
 ```sh
 npm run infra:staff:deploy -- Des424G02StaffPortal --require-approval never \
   -c "staffImageTag=${STAFF_IMAGE_TAG}" \
-  -c "cloudFrontPrefixListId=${CF_PREFIX_LIST_ID}"
+  -c "cloudFrontPrefixListId=${CF_PREFIX_LIST_ID}" \
+  -c "staffVpcId=${STAFF_VPC_ID}" \
+  -c "staffPublicSubnetA=${STAFF_SUBNET_A}" \
+  -c "staffPublicSubnetB=${STAFF_SUBNET_B}" \
+  -c staffAzA=ap-southeast-1a -c staffAzB=ap-southeast-1b
 STAFF_ORIGIN=$(aws cloudformation describe-stacks \
   --stack-name Des424G02StaffPortal --region ap-southeast-1 \
   --query 'Stacks[0].Outputs[?OutputKey==`StaffPortalUrl`].OutputValue | [0]' \
