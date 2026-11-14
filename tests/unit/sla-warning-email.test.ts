@@ -60,7 +60,7 @@ describe('buildSlaWarningEmail', () => {
   it('links to the ticket when the dashboard address is known', () => {
     expect(
       buildSlaWarningEmail(ticket(), NOW, 'https://admin.example.com/').text,
-    ).toContain('View ticket: https://admin.example.com/tickets/tkt_1');
+    ).toContain('View ticket: https://admin.example.com/tech/jobs/tkt_1');
   });
 
   it('says UNKNOWN for what the ticket does not have, and refuses a ticket with no deadline', () => {
@@ -102,7 +102,7 @@ describe('sendSlaWarningEmail', () => {
       to: 'plumbing@example.com',
       subject: '[SLA warning] MEDIUM ticket tkt_1 - PLUMBING',
       text: expect.stringContaining(
-        'View ticket: https://admin.example.com/tickets/tkt_1',
+        'View ticket: https://admin.example.com/tech/jobs/tkt_1',
       ),
     });
   });

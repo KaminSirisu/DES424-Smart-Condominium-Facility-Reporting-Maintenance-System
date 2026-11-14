@@ -460,7 +460,7 @@ The record is written with `attribute_not_exists(ticketId)`, so writing it twice
 
 **Recipient.** The `email` field of the team's record in the `Teams` table. While `TEAMS_TABLE_NAME` is not set, or the record has no address, the `TEAM_EMAILS` environment variable is the fallback.
 
-**Email.** Subject: `[<priority>] Work order <ticketId> - <teamId>`. The subject only contains values the system generated, never text written by a resident. The body lists the ticket id, priority, category, location, report time, deadline (shown as Asia/Bangkok time; stored times stay UTC) and description, plus a link when `ADMIN_DASHBOARD_URL` is set. The link format `<ADMIN_DASHBOARD_URL>/tickets/<ticketId>` is an assumption to confirm with the admin dashboard.
+**Email.** Subject: `[<priority>] Work order <ticketId> - <teamId>`. The subject only contains values the system generated, never text written by a resident. The body lists the ticket id, priority, category, location, report time, deadline (shown as Asia/Bangkok time; stored times stay UTC) and description, plus a link when `ADMIN_DASHBOARD_URL` is set. Team work orders and SLA warnings link to `<ADMIN_DASHBOARD_URL>/tech/jobs/<ticketId>`; manager SLA alerts link to `<ADMIN_DASHBOARD_URL>/tickets/<ticketId>`. The staff portal hosts both roles at that origin and returns users to their ticket after login.
 
 **Failures**
 

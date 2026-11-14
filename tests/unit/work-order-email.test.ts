@@ -66,7 +66,7 @@ describe('buildWorkOrderEmail', () => {
     expect(buildWorkOrderEmail(triaged()).text).not.toContain('View ticket');
     expect(
       buildWorkOrderEmail(triaged(), 'https://admin.example.com/').text,
-    ).toContain('View ticket: https://admin.example.com/tickets/tkt_1');
+    ).toContain('View ticket: https://admin.example.com/tech/jobs/tkt_1');
   });
 
   it('refuses a ticket that has not been triaged', () => {

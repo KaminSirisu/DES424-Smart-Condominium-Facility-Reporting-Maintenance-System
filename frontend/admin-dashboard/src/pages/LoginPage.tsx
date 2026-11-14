@@ -1,9 +1,9 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { Navigate, useNavigate } from 'react-router';
+import { Navigate, useLocation, useNavigate } from 'react-router';
 import { Building2, KeyRound, Lock, Mail } from 'lucide-react';
 import { api, ApiError, errorMessage } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { homePath } from '../services/session';
+import { postLoginPath } from '../services/session';
 import type { MfaEnrollment, StaffSession } from '../services/types';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -29,7 +29,11 @@ const buttonClass =
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { session, signIn } = useAuth();
+  const requested =
+    (location.state as { from?: unknown } | null)?.from ??
+    new URLSearchParams(location.search).get('from');
   const [step, setStep] = useState<Step>({ kind: 'password' });
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -38,11 +42,14 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Already logged in: go straight to this role's app.
-  if (session) return <Navigate to={homePath(session.staff.role)} replace />;
+  if (session)
+    return (
+      <Navigate to={postLoginPath(session.staff.role, requested)} replace />
+    );
 
   function finish(s: StaffSession) {
     signIn(s);
-    navigate(homePath(s.staff.role), { replace: true });
+    navigate(postLoginPath(s.staff.role, requested), { replace: true });
   }
 
   async function run(action: () => Promise<void>) {

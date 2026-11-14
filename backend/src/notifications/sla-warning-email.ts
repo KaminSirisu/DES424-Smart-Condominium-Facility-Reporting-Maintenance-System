@@ -2,6 +2,7 @@ import { getTeamEmail } from '../shared/teams.js';
 import type { TicketRecord } from '../tickets/types.js';
 import { isTeamId } from '../triage/policy.js';
 import { formatDuration } from './sla-breach-email.js';
+import { staffTicketLink } from './staff-ticket-link.js';
 import {
   formatBangkok,
   sesSender,
@@ -42,7 +43,7 @@ export function buildSlaWarningEmail(
   if (dashboardUrl) {
     lines.push(
       '',
-      `View ticket: ${dashboardUrl.replace(/\/+$/, '')}/tickets/${ticket.id}`,
+      `View ticket: ${staffTicketLink(dashboardUrl, ticket.id, 'TECHNICIAN')}`,
     );
   }
 

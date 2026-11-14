@@ -2,6 +2,7 @@ import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { getTeamEmail } from '../shared/teams.js';
 import type { TicketRecord } from '../tickets/types.js';
 import { isTeamId } from '../triage/policy.js';
+import { staffTicketLink } from './staff-ticket-link.js';
 
 /**
  * Work order email to the assigned maintenance team (SCFRMS-46).
@@ -107,7 +108,7 @@ export function buildWorkOrderEmail(
   if (dashboardUrl) {
     lines.push(
       '',
-      `View ticket: ${dashboardUrl.replace(/\/+$/, '')}/tickets/${ticket.id}`,
+      `View ticket: ${staffTicketLink(dashboardUrl, ticket.id, 'TECHNICIAN')}`,
     );
   }
 

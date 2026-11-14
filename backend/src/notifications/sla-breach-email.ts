@@ -1,4 +1,5 @@
 import type { TicketRecord } from '../tickets/types.js';
+import { staffTicketLink } from './staff-ticket-link.js';
 import {
   responseMinutes,
   slaStartOf,
@@ -84,7 +85,7 @@ export function buildSlaBreachEmail(
           ...(dashboardUrl
             ? [
                 '',
-                `View ticket: ${dashboardUrl.replace(/\/+$/, '')}/tickets/${ticket.id}`,
+                `View ticket: ${staffTicketLink(dashboardUrl, ticket.id, 'MANAGER')}`,
               ]
             : []),
         ].join('\n') + '\n',
@@ -126,7 +127,7 @@ export function buildSlaBreachEmail(
   if (dashboardUrl) {
     lines.push(
       '',
-      `View ticket: ${dashboardUrl.replace(/\/+$/, '')}/tickets/${ticket.id}`,
+      `View ticket: ${staffTicketLink(dashboardUrl, ticket.id, 'MANAGER')}`,
     );
   }
 
