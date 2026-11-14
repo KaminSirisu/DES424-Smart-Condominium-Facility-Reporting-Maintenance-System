@@ -31,6 +31,8 @@
     "test:smoke:cross-team-detail": "node tests/smoke/cross-team-detail.mjs",
     "test:smoke:reporter-isolation": "node tests/smoke/reporter-isolation.mjs",
     "test:smoke:extended": "node tests/smoke/extended-api.mjs",
+    "test:demo:staff": "playwright test --config playwright.demo.config.ts --headed",
+    "test:demo:staff:list": "playwright test --config playwright.demo.config.ts --list",
     "build": "npm run build --workspaces",
     "infra:typecheck": "tsc -p infrastructure/aws/tsconfig.json --noEmit",
     "infra:synth": "cd infrastructure/aws && cdk synth",
@@ -43,6 +45,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.65.1",
     "@types/aws-lambda": "^8.10.164",
     "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
