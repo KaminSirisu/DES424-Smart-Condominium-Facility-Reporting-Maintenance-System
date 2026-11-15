@@ -19,25 +19,33 @@ npx playwright install chromium
 npm run test:demo:staff:list
 ```
 
+The list command only discovers the test; it does not open Gmail or change a
+ticket. On this Mac checkout, Playwright discovery can take about a minute.
+
 This headed browser test needs a graphical desktop. Run it on your Mac, not in
 AWS CloudShell. Keep `playwright-report/` and `test-results/` out of Git; the
 video and screenshots can contain ticket details.
 
-Playwright opens its own Chrome profile, so it cannot automatically reuse a
-Gmail tab already signed in to your normal Chrome. Sign in **once** to the
-technician mailbox in Playwright's Chrome window before recording the demo:
+Google may reject sign-in inside a Playwright-controlled browser. The setup
+opens a **normal Chrome window** with a dedicated profile, separate from your
+everyday Chrome profile. Sign in **once** to the technician mailbox before
+recording the demo:
 
 ```sh
 export STAFF_EMAIL='tech.REPLACE_WITH_TEAM.des424@gmail.com'
 npm run test:demo:gmail:setup
 ```
 
-The setup opens Gmail. Complete Google sign-in yourself, check that the correct
-team inbox is visible, then return to the terminal and press Enter. The script
-checks the account shown in Gmail's tab title and saves its session locally at
-`playwright/.auth/gmail.json` (ignored by Git). This file contains sensitive
-login state; do not share it. Run setup again if the session expires or you
-switch to another team. The setup does not read your Google password.
+The setup opens Gmail in normal Chrome. Complete Google sign-in yourself and
+check that the correct team inbox is visible. With that dedicated Chrome window
+active, press **Cmd+Q** to quit its Chrome instance, then return to the terminal
+and press Enter. Closing only the tab can leave the profile locked. The script
+reopens the same profile, confirms the Gmail account, and marks setup complete.
+The profile lives in `../.scfrms-demo/gmail-chrome-profile/` outside the repository
+and contains sensitive login state; do not share it. Run setup again if the
+session expires or you switch teams. The setup does not read your Google
+password. Keep the dedicated Chrome instance closed before the test starts;
+Chrome cannot open the same profile twice.
 
 ## Record one live run
 
@@ -55,8 +63,9 @@ switch to another team. The setup does not read your Google password.
 
 ```sh
 export DEMO_TICKET_ID='tkt_REPLACE_WITH_FULL_ID'
-export DEMO_PHOTO_PATH="$HOME/Downloads/repair-photo.jpg"
-export STAFF_EMAIL='tech.REPLACE_WITH_TEAM.des424@gmail.com'
+export DEMO_TICKET_ID='tkt_025188aa3a50ca0dadb3e0f4e2'
+export DEMO_PHOTO_PATH="$HOME/Downloads/repair-photo.jpeg"
+export STAFF_EMAIL='tech.plumber.des424@gmail.com'
 read -r -s 'STAFF_PASSWORD?Technician password: '; printf '\n'
 export STAFF_PASSWORD
 ```
