@@ -22,6 +22,7 @@ cdk.out/
 # Test and editor output
 playwright-report/
 test-results/
+playwright/.auth/
 .DS_Store
 .idea/
 .vscode/

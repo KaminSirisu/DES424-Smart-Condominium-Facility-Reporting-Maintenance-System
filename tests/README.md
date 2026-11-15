@@ -6,6 +6,10 @@
 
 Vitest runs from the repository root with `npm test`.
 
+For a headed, video-recorded technician journey against the deployed staff
+portal, follow [the staff demo runbook](e2e/STAFF-DEMO.md). It starts with a
+ticket created manually in LINE and changes that real ticket to `DONE`.
+
 To verify the deployed reporter intake path, use `npm run test:smoke:intake`. It requests a presigned URL, uploads a JPEG to S3, creates a ticket, and checks for `RECEIVED`. It creates a real ticket in the development account, so use a clearly labeled test location and description. The token must be a fresh LINE ID token from the same LINE Login channel configured in the dev stack. In CloudShell, read it without putting it in shell history:
 
 ```sh
