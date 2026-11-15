@@ -1,13 +1,8 @@
-import { existsSync } from 'node:fs';
-import { mkdir, readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { expect, test, type Page, type Video } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 const DEFAULT_PORTAL_URL = 'https://d3hd1sqczt5st1.cloudfront.net';
-const GMAIL_INBOX_URL = 'https://mail.google.com/mail/u/0/#inbox';
-const GMAIL_PROFILE_ROOT = resolve('..', '.scfrms-demo');
-const GMAIL_PROFILE_PATH = join(GMAIL_PROFILE_ROOT, 'gmail-chrome-profile');
-const GMAIL_SETUP_PATH = join(GMAIL_PROFILE_ROOT, 'gmail-setup.json');
 const TICKET_ID = /^tkt_[0-9a-f]{26}$/;
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 
@@ -26,20 +21,6 @@ async function demoInputs(): Promise<DemoInputs> {
   const email = process.env.STAFF_EMAIL?.trim() ?? '';
   const password = process.env.STAFF_PASSWORD ?? '';
   const gmailAddress = (process.env.GMAIL_ACCOUNT_EMAIL || email).trim();
-
-  if (!existsSync(GMAIL_SETUP_PATH)) {
-    throw new Error(
-      'Run npm run test:demo:gmail:setup once for this technician Gmail account.',
-    );
-  }
-  const savedSetup = JSON.parse(await readFile(GMAIL_SETUP_PATH, 'utf8')) as {
-    email?: string;
-  };
-  if (savedSetup.email?.toLowerCase() !== gmailAddress.toLowerCase()) {
-    throw new Error(
-      'The saved Gmail profile belongs to another account. Run npm run test:demo:gmail:setup for this technician.',
-    );
-  }
 
   if (!TICKET_ID.test(ticketId)) {
     throw new Error(
@@ -80,35 +61,46 @@ async function demoInputs(): Promise<DemoInputs> {
   };
 }
 
+async function findTechnicianGmailTab(
+  contexts: BrowserContext[],
+  email: string,
+): Promise<{ context: BrowserContext; page: Page }> {
+  for (const context of contexts) {
+    for (const page of context.pages()) {
+      if (!page.url().startsWith('https://mail.google.com/mail/')) continue;
+      if ((await page.title()).toLowerCase().includes(email.toLowerCase())) {
+        return { context, page };
+      }
+    }
+  }
+  throw new Error(
+    `Open the ${email} Gmail inbox in your regular Chrome window, then run npm run test:demo:gmail:setup.`,
+  );
+}
+
 test('technician completes the ticket created in LINE', async ({
   playwright,
 }, testInfo) => {
   const input = await demoInputs();
   const shortId = `#${input.ticketId.slice(4, 12).toUpperCase()}`;
-  const videoDir = testInfo.outputPath('videos');
-  await mkdir(videoDir, { recursive: true });
-  const context = await playwright.chromium.launchPersistentContext(
-    GMAIL_PROFILE_PATH,
-    {
-      channel: 'chrome',
-      headless: false,
-      viewport: { width: 1280, height: 900 },
-      recordVideo: { dir: videoDir },
-    },
-  );
-  const videos = new Set<Video>();
-  const trackVideo = (openedPage: Page): void => {
-    const video = openedPage.video();
-    if (video) videos.add(video);
-  };
-  context.on('page', trackVideo);
-  context.pages().forEach(trackVideo);
-  const page = context.pages()[0] ?? (await context.newPage());
+  const browser = await playwright.chromium.connectOverCDP('chrome', {
+    noDefaults: true,
+    timeout: 30_000,
+  });
+  const { context, page } = await findTechnicianGmailTab(
+    browser.contexts(),
+    input.gmailAddress,
+  ).catch(async (error: unknown) => {
+    await browser.close();
+    throw error;
+  });
   let portalPage = page;
 
   try {
     await test.step('Open the technician Gmail inbox', async () => {
-      await page.goto(GMAIL_INBOX_URL);
+      const inboxUrl = new URL(page.url());
+      inboxUrl.hash = '#inbox';
+      await page.goto(inboxUrl.toString(), { waitUntil: 'domcontentloaded' });
       await expect(page).toHaveTitle(
         new RegExp(
           input.gmailAddress.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
@@ -144,25 +136,19 @@ test('technician completes the ticket created in LINE', async ({
         );
       }
 
+      const pagesBeforeClick = new Set(context.pages());
+      const portalOrigin = new URL(input.workOrderUrl).origin;
+      const openedForThisClick = (candidate: Page): boolean =>
+        (candidate === page || !pagesBeforeClick.has(candidate)) &&
+        candidate.url().startsWith(portalOrigin);
       await link.click();
       await expect
-        .poll(() =>
-          context
-            .pages()
-            .some((candidate) =>
-              candidate.url().startsWith(new URL(input.workOrderUrl).origin),
-            ),
-        )
+        .poll(() => context.pages().some(openedForThisClick))
         .toBe(true);
-      const opened = context
-        .pages()
-        .find((candidate) =>
-          candidate.url().startsWith(new URL(input.workOrderUrl).origin),
-        );
+      const opened = context.pages().find(openedForThisClick);
       if (!opened)
         throw new Error('The work order link did not open the staff portal.');
       portalPage = opened;
-      await portalPage.setViewportSize({ width: 520, height: 900 });
       await portalPage.bringToFront();
       await expect(
         portalPage.getByRole('heading', { name: 'Welcome back' }),
@@ -251,13 +237,6 @@ test('technician completes the ticket created in LINE', async ({
       });
     });
   } finally {
-    await context.close();
-    let videoNumber = 1;
-    for (const video of videos) {
-      await testInfo.attach(`browser-video-${videoNumber++}`, {
-        path: await video.path(),
-        contentType: 'video/webm',
-      });
-    }
+    await browser.close();
   }
 });

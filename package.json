@@ -31,7 +31,7 @@
     "test:smoke:cross-team-detail": "node tests/smoke/cross-team-detail.mjs",
     "test:smoke:reporter-isolation": "node tests/smoke/reporter-isolation.mjs",
     "test:smoke:extended": "node tests/smoke/extended-api.mjs",
-    "test:demo:staff": "playwright test --config playwright.demo.config.ts --headed",
+    "test:demo:staff": "playwright test --config playwright.demo.config.ts",
     "test:demo:staff:list": "echo 'Discovering the Playwright demo test; this may take about a minute on this Mac checkout.' && playwright test --config playwright.demo.config.ts --list",
     "test:demo:gmail:setup": "node --import tsx tests/e2e/setup-gmail.ts",
     "build": "npm run build --workspaces",

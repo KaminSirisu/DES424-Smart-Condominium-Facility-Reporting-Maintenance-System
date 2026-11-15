@@ -3,10 +3,11 @@
 This runs against the **deployed** staff portal and changes one real ticket from
 `ASSIGNED` to `IN_PROGRESS` to `DONE`. The reporter creates the ticket manually
 in LINE while a desktop screen recorder captures the whole demonstration.
-Playwright opens the technician Gmail inbox, clicks its newest work order, follows
-the ticket link, exercises the technician website, keeps browser videos, and
-lists each action as a step in its HTML
-report. The final LINE completion message and its proof photo are checked
+Playwright attaches to the technician Gmail tab in your regular Chrome, clicks
+its newest work order, follows the ticket link, and exercises the technician
+website. Its HTML report lists each action and includes the final screenshot.
+The desktop recording captures the full journey. The final LINE completion
+message and its proof photo are checked
 visually in the desktop recording; Playwright cannot inspect the native LINE app.
 
 ## Prepare once on your Mac
@@ -15,37 +16,30 @@ From a current checkout of this branch:
 
 ```sh
 npm ci
-npx playwright install chromium
 npm run test:demo:staff:list
 ```
 
 The list command only discovers the test; it does not open Gmail or change a
 ticket. On this Mac checkout, Playwright discovery can take about a minute.
 
-This headed browser test needs a graphical desktop. Run it on your Mac, not in
-AWS CloudShell. Keep `playwright-report/` and `test-results/` out of Git; the
-video and screenshots can contain ticket details.
+Run this on your Mac, not in AWS CloudShell. Keep `playwright-report/` and
+`test-results/` out of Git; screenshots can contain ticket details.
 
-Google may reject sign-in inside a Playwright-controlled browser. The setup
-opens a **normal Chrome window** with a dedicated profile, separate from your
-everyday Chrome profile. Sign in **once** to the technician mailbox before
-recording the demo:
+Google rejected sign-in inside the Playwright browser. Use your **regular
+Chrome**, already signed in to the technician Gmail account. Open that inbox
+in a tab. In the same Chrome window, visit `chrome://inspect/#remote-debugging`
+and enable **Allow remote debugging for this browser instance**. Chrome may ask
+you to allow Playwright to connect. Then check the connection:
 
 ```sh
 export STAFF_EMAIL='tech.REPLACE_WITH_TEAM.des424@gmail.com'
 npm run test:demo:gmail:setup
 ```
 
-The setup opens Gmail in normal Chrome. Complete Google sign-in yourself and
-check that the correct team inbox is visible. With that dedicated Chrome window
-active, press **Cmd+Q** to quit its Chrome instance, then return to the terminal
-and press Enter. Closing only the tab can leave the profile locked. The script
-reopens the same profile, confirms the Gmail account, and marks setup complete.
-The profile lives in `../.scfrms-demo/gmail-chrome-profile/` outside the repository
-and contains sensitive login state; do not share it. Run setup again if the
-session expires or you switch teams. The setup does not read your Google
-password. Keep the dedicated Chrome instance closed before the test starts;
-Chrome cannot open the same profile twice.
+The setup checks that Playwright can see the matching Gmail tab. It does not
+save credentials or browser state. Leave regular Chrome and the technician
+Gmail tab open for the demo. The obsolete dedicated profile from the earlier
+setup is not used.
 
 ## Record one live run
 
@@ -63,9 +57,8 @@ Chrome cannot open the same profile twice.
 
 ```sh
 export DEMO_TICKET_ID='tkt_REPLACE_WITH_FULL_ID'
-export DEMO_TICKET_ID='tkt_025188aa3a50ca0dadb3e0f4e2'
 export DEMO_PHOTO_PATH="$HOME/Downloads/repair-photo.jpeg"
-export STAFF_EMAIL='tech.plumber.des424@gmail.com'
+export STAFF_EMAIL='tech.REPLACE_WITH_TEAM.des424@gmail.com'
 read -r -s 'STAFF_PASSWORD?Technician password: '; printf '\n'
 export STAFF_PASSWORD
 ```
@@ -82,8 +75,8 @@ npm run test:demo:staff
 5. Keep recording until the reporter's LINE completion message and repair
    photo have appeared. Playwright verifies the site's `DONE` state and its
    loaded proof photo; the LINE message is a separate visual check.
-6. View the step report and browser video, then clear the password from your
-   shell:
+6. View the step report, then clear the password from your shell and disable
+   Chrome's remote debugging toggle:
 
 ```sh
 npx playwright show-report playwright-report/staff-demo

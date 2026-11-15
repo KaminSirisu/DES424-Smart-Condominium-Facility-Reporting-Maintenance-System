@@ -1,27 +1,4 @@
-import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { lstat, mkdir, rename, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { createInterface } from 'node:readline/promises';
-import { promisify } from 'node:util';
-import { chromium } from '@playwright/test';
-
-const execFileAsync = promisify(execFile);
-const gmailUrl = 'https://mail.google.com/mail/u/0/#inbox';
-const profileRoot = resolve('..', '.scfrms-demo');
-const profileDir = join(profileRoot, 'gmail-chrome-profile');
-const markerPath = join(profileRoot, 'gmail-setup.json');
-const oldProfileDir = resolve('playwright/.auth/gmail-chrome-profile');
-
-async function isProfileOpen(directory: string): Promise<boolean> {
-  try {
-    await lstat(join(directory, 'SingletonLock'));
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw error;
-  }
-}
+import { chromium, type Browser } from '@playwright/test';
 
 async function main(): Promise<void> {
   const email = (
@@ -30,75 +7,37 @@ async function main(): Promise<void> {
     ''
   ).trim();
   if (!email) {
-    throw new Error(
-      'Set STAFF_EMAIL to the technician Gmail address before Gmail setup.',
-    );
-  }
-  if (process.platform !== 'darwin') {
-    throw new Error(
-      'This Gmail setup currently requires macOS and Google Chrome.',
-    );
+    throw new Error('Set STAFF_EMAIL to the technician Gmail address.');
   }
 
-  await mkdir(profileRoot, { recursive: true, mode: 0o700 });
-  if (existsSync(oldProfileDir) && !existsSync(profileDir)) {
-    if (await isProfileOpen(oldProfileDir)) {
-      throw new Error(
-        'Close the dedicated Chrome window opened by the earlier setup, then rerun this command. Its existing Gmail profile will be moved outside the repository.',
-      );
-    }
-    await rename(oldProfileDir, profileDir);
-  }
-  await execFileAsync('open', [
-    '-na',
-    'Google Chrome',
-    '--args',
-    `--user-data-dir=${profileDir}`,
-    gmailUrl,
-  ]);
-
-  console.log(
-    `Sign in to ${email} in the new, normal Chrome window. The script does not read your Google password.`,
-  );
-  const prompt = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+  let browser: Browser;
   try {
-    for (;;) {
-      await prompt.question(
-        'When Gmail is open, press Cmd+Q in that dedicated Chrome window, then press Enter here: ',
-      );
-      if (!(await isProfileOpen(profileDir))) break;
-      console.log(
-        'That Chrome profile is still open. Close its window before continuing.',
-      );
-    }
-  } finally {
-    prompt.close();
-  }
-
-  const context = await chromium.launchPersistentContext(profileDir, {
-    channel: 'chrome',
-    headless: false,
-  });
-  try {
-    const page = context.pages()[0] ?? (await context.newPage());
-    await page.goto(gmailUrl);
-    const title = await page.title();
-    if (!title.toLowerCase().includes(email.toLowerCase())) {
-      throw new Error(
-        `Gmail is not signed in as ${email} in the dedicated profile. Check the account and repeat setup.`,
-      );
-    }
-    await writeFile(markerPath, JSON.stringify({ email }, null, 2), {
-      mode: 0o600,
+    browser = await chromium.connectOverCDP('chrome', {
+      noDefaults: true,
+      timeout: 30_000,
     });
-  } finally {
-    await context.close();
+  } catch {
+    throw new Error(
+      'In your regular Chrome, open chrome://inspect/#remote-debugging and enable "Allow remote debugging for this browser instance", then rerun this command.',
+    );
   }
 
-  console.log(`Technician Gmail profile is ready at ${profileDir}.`);
+  try {
+    for (const context of browser.contexts()) {
+      for (const page of context.pages()) {
+        if (!page.url().startsWith('https://mail.google.com/mail/')) continue;
+        if ((await page.title()).toLowerCase().includes(email.toLowerCase())) {
+          console.log(`Gmail tab for ${email} is ready in regular Chrome.`);
+          return;
+        }
+      }
+    }
+    throw new Error(
+      `Open the ${email} Gmail inbox in regular Chrome and rerun this command.`,
+    );
+  } finally {
+    await browser.close();
+  }
 }
 
 void main().catch((error: unknown) => {
