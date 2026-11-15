@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 const DEFAULT_PORTAL_URL = 'https://d3hd1sqczt5st1.cloudfront.net';
+const DEFAULT_STEP_DELAY_MS = 2_000;
 const TICKET_ID = /^tkt_[0-9a-f]{26}$/;
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 
@@ -13,6 +14,7 @@ type DemoInputs = {
   photoPath: string;
   email: string;
   password: string;
+  stepDelayMs: number;
 };
 
 async function demoInputs(): Promise<DemoInputs> {
@@ -21,6 +23,9 @@ async function demoInputs(): Promise<DemoInputs> {
   const email = process.env.STAFF_EMAIL?.trim() ?? '';
   const password = process.env.STAFF_PASSWORD ?? '';
   const gmailAddress = (process.env.GMAIL_ACCOUNT_EMAIL || email).trim();
+  const stepDelayMs = Number(
+    process.env.DEMO_STEP_DELAY_MS ?? DEFAULT_STEP_DELAY_MS,
+  );
 
   if (!TICKET_ID.test(ticketId)) {
     throw new Error(
@@ -31,6 +36,13 @@ async function demoInputs(): Promise<DemoInputs> {
     throw new Error(
       'Set DEMO_PHOTO_PATH, STAFF_EMAIL, and STAFF_PASSWORD before running the live demo.',
     );
+  }
+  if (
+    !Number.isInteger(stepDelayMs) ||
+    stepDelayMs < 0 ||
+    stepDelayMs > 10_000
+  ) {
+    throw new Error('DEMO_STEP_DELAY_MS must be an integer from 0 to 10000.');
   }
 
   const photo = await readFile(resolve(photoPath));
@@ -58,7 +70,12 @@ async function demoInputs(): Promise<DemoInputs> {
     photoPath: resolve(photoPath),
     email,
     password,
+    stepDelayMs,
   };
+}
+
+async function pauseBeforeStep(page: Page, delayMs: number): Promise<void> {
+  if (delayMs > 0) await page.waitForTimeout(delayMs);
 }
 
 async function findTechnicianGmailTab(
@@ -98,6 +115,7 @@ test('technician completes the ticket created in LINE', async ({
 
   try {
     await test.step('Open the technician Gmail inbox', async () => {
+      await pauseBeforeStep(page, input.stepDelayMs);
       const inboxUrl = new URL(page.url());
       inboxUrl.hash = '#inbox';
       await page.goto(inboxUrl.toString(), { waitUntil: 'domcontentloaded' });
@@ -111,6 +129,7 @@ test('technician completes the ticket created in LINE', async ({
     });
 
     await test.step('Open the newest inbox row and check its work order', async () => {
+      await pauseBeforeStep(page, input.stepDelayMs);
       const newestRow = page.locator('tr.zA:visible').first();
       await expect(newestRow).toContainText(/work order/i);
       await expect(newestRow).toContainText(
@@ -123,6 +142,7 @@ test('technician completes the ticket created in LINE', async ({
     });
 
     await test.step('Follow the email link to the staff portal', async () => {
+      await pauseBeforeStep(page, input.stepDelayMs);
       const link = page.getByRole('link', {
         name: new RegExp(input.ticketId, 'i'),
       });
@@ -157,6 +177,7 @@ test('technician completes the ticket created in LINE', async ({
     });
 
     await test.step('Sign in as the assigned technician', async () => {
+      await pauseBeforeStep(portalPage, input.stepDelayMs);
       await portalPage.getByPlaceholder('Enter your email').fill(input.email);
       await portalPage
         .getByPlaceholder('Enter your password')
@@ -169,6 +190,7 @@ test('technician completes the ticket created in LINE', async ({
     });
 
     await test.step('Confirm the new ticket is assigned to this team', async () => {
+      await pauseBeforeStep(portalPage, input.stepDelayMs);
       await expect(
         portalPage
           .locator('section')
@@ -181,6 +203,7 @@ test('technician completes the ticket created in LINE', async ({
     });
 
     await test.step('Start work and verify In progress', async () => {
+      await pauseBeforeStep(portalPage, input.stepDelayMs);
       await portalPage.getByRole('button', { name: 'Start work' }).click();
       await expect(
         portalPage
@@ -194,6 +217,7 @@ test('technician completes the ticket created in LINE', async ({
     });
 
     await test.step('Upload the repair photo', async () => {
+      await pauseBeforeStep(portalPage, input.stepDelayMs);
       await portalPage
         .locator('input[type="file"]')
         .setInputFiles(input.photoPath);
@@ -206,6 +230,7 @@ test('technician completes the ticket created in LINE', async ({
     });
 
     await test.step('Mark the ticket Done', async () => {
+      await pauseBeforeStep(portalPage, input.stepDelayMs);
       await portalPage.getByRole('button', { name: 'Mark as done' }).click();
       await expect(
         portalPage
@@ -219,6 +244,7 @@ test('technician completes the ticket created in LINE', async ({
     });
 
     await test.step('Confirm the completed ticket shows its repair photo', async () => {
+      await pauseBeforeStep(portalPage, input.stepDelayMs);
       const completedPhoto = portalPage.getByRole('img', {
         name: 'Proof of repair',
       });
